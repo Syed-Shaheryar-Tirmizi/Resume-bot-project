@@ -1,0 +1,290 @@
+import os
+import uuid
+
+import httpx
+import streamlit as st
+
+from backend.config import settings
+from streamlit_errors import format_api_error
+
+DEFAULT_API = os.environ.get("RESUME_INSIGHT_API", "http://127.0.0.1:8000")
+
+
+def api_base() -> str:
+    return st.session_state.get("api_base", DEFAULT_API).rstrip("/")
+
+
+@st.cache_data(ttl=15, show_spinner=False)
+def fetch_ready_status(api_root: str) -> tuple[bool, list[str]]:
+    root = (api_root or DEFAULT_API).rstrip("/")
+    try:
+        with httpx.Client(timeout=12.0) as client:
+            r = client.get(f"{root}/ready")
+            r.raise_for_status()
+            data = r.json()
+            if data.get("ready"):
+                return True, []
+            return False, list(data.get("messages") or ["The API reported it is not fully ready."])
+    except httpx.HTTPStatusError as e:
+        return False, [format_api_error(e)]
+    except httpx.RequestError as e:
+        return False, [format_api_error(e)]
+    except Exception as e:
+        return False, [format_api_error(e)]
+
+
+def post_json(path: str, payload: dict) -> dict:
+    with httpx.Client(timeout=120.0) as client:
+        r = client.post(f"{api_base()}{path}", json=payload)
+        r.raise_for_status()
+        return r.json()
+
+
+def post_file(path: str, field: str, file_bytes: bytes, filename: str) -> dict:
+    with httpx.Client(timeout=120.0) as client:
+        r = client.post(
+            f"{api_base()}{path}",
+            files={field: (filename, file_bytes)},
+        )
+        r.raise_for_status()
+        return r.json()
+
+
+def post_export_docx(content: str) -> bytes:
+    with httpx.Client(timeout=120.0) as client:
+        r = client.post(
+            f"{api_base()}/api/documents/export-resume-docx",
+            json={"content": content},
+        )
+        r.raise_for_status()
+        return r.content
+
+
+def last_assistant_text() -> str:
+    for m in reversed(st.session_state.chat_messages):
+        if m["role"] == "assistant":
+            return m["content"]
+    return ""
+
+
+st.set_page_config(page_title="Resume Insight AI", layout="wide")
+st.title("Resume Insight AI")
+st.caption(
+    "AI resume creation and semantic matching (Weaviate required)."
+    + (
+        " Domain transform and voice input are disabled in this build."
+        if not (settings.enable_cv_domain_transform or settings.enable_voice_input)
+        else ""
+    )
+)
+
+if "api_base" not in st.session_state:
+    st.session_state.api_base = DEFAULT_API
+if "chat_messages" not in st.session_state:
+    st.session_state.chat_messages = []
+if "export_docx" not in st.session_state:
+    st.session_state.export_docx = None
+
+with st.sidebar:
+    st.session_state.api_base = st.text_input("API base URL", value=st.session_state.api_base)
+    st.markdown("**Backend**")
+    st.markdown("- Run **Weaviate** locally or use **Weaviate Cloud** — see `.env.example`")
+    st.markdown("- `python -m uvicorn backend.main:app --reload`")
+    st.markdown("- Set `OPENAI_API_KEY` in `.env`")
+    if st.button("Refresh status", help="Re-check /ready immediately"):
+        fetch_ready_status.clear()
+
+ready_ok, ready_msgs = fetch_ready_status(api_base())
+if not ready_ok:
+    for msg in ready_msgs:
+        st.error(msg)
+else:
+    st.caption("API status: ready (OpenAI key set, Weaviate connected).")
+
+_tab_labels = ["Resume chatbot"]
+if settings.enable_cv_domain_transform:
+    _tab_labels.append("Domain transform")
+_tab_labels.append("Semantic matching")
+if settings.enable_voice_input:
+    _tab_labels.append("Voice (Whisper)")
+_tab_widgets = st.tabs(_tab_labels)
+_i = 0
+tab_chat = _tab_widgets[_i]
+_i += 1
+tab_xform = None
+if settings.enable_cv_domain_transform:
+    tab_xform = _tab_widgets[_i]
+    _i += 1
+tab_match = _tab_widgets[_i]
+_i += 1
+tab_voice = None
+if settings.enable_voice_input:
+    tab_voice = _tab_widgets[_i]
+
+with tab_chat:
+    st.subheader("Conversational resume creation")
+    for m in st.session_state.chat_messages:
+        with st.chat_message(m["role"]):
+            st.markdown(m["content"])
+    prompt = st.chat_input("Describe your background or ask to draft your resume")
+    if prompt:
+        st.session_state.export_docx = None
+        st.session_state.chat_messages.append({"role": "user", "content": prompt})
+        try:
+            payload = {"messages": st.session_state.chat_messages}
+            data = post_json("/api/chat", payload)
+            reply = data.get("reply", "")
+            st.session_state.chat_messages.append({"role": "assistant", "content": reply})
+        except (httpx.HTTPStatusError, httpx.RequestError) as e:
+            st.error(format_api_error(e))
+        except Exception as e:
+            st.error(format_api_error(e))
+        st.rerun()
+    if st.button("Clear conversation"):
+        st.session_state.chat_messages = []
+        st.session_state.export_docx = None
+        st.rerun()
+
+    st.divider()
+    st.markdown("**Download formatted resume** — builds a Word file from the **latest AI reply**.")
+    dc1, dc2 = st.columns(2)
+    with dc1:
+        if st.button("Build Word document (.docx)"):
+            t = last_assistant_text().strip()
+            if len(t) < 10:
+                st.warning("Ask the chatbot to draft your resume first.")
+            else:
+                try:
+                    st.session_state.export_docx = post_export_docx(t)
+                    st.success("Document ready — download below.")
+                except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                    st.error(format_api_error(e))
+                except Exception as e:
+                    st.error(format_api_error(e))
+    with dc2:
+        if st.session_state.export_docx:
+            st.download_button(
+                label="Download resume.docx",
+                data=st.session_state.export_docx,
+                file_name="resume.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                key="download_resume_docx",
+            )
+
+if tab_xform is not None:
+    with tab_xform:
+        st.subheader("Cross-domain resume transformation")
+        resume_text = st.text_area("Paste resume text", height=220, placeholder="Full resume…")
+        target = st.text_input("Target domain", placeholder="e.g. Digital Marketing")
+        if st.button("Transform"):
+            if len(resume_text.strip()) < 20 or not target.strip():
+                st.warning("Provide resume text (20+ chars) and a target domain.")
+            else:
+                try:
+                    out = post_json(
+                        "/api/transform",
+                        {"resume_text": resume_text, "target_domain": target.strip()},
+                    )
+                    st.markdown(out.get("transformed_resume", ""))
+                except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                    st.error(format_api_error(e))
+                except Exception as e:
+                    st.error(format_api_error(e))
+
+with tab_match:
+    st.subheader("Upload resume & job description, then match")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("**Your resume**")
+        up_resume = st.file_uploader(
+            "Upload resume (PDF, DOCX, or TXT)",
+            type=["pdf", "docx", "txt"],
+            key="up_resume",
+        )
+        if up_resume is not None and st.button("Extract text from resume file", key="btn_extract_resume"):
+            try:
+                extracted = post_file(
+                    "/api/documents/extract",
+                    "file",
+                    up_resume.getvalue(),
+                    up_resume.name or "resume.pdf",
+                )
+                st.session_state["idx_body"] = extracted.get("text", "")
+                st.success("Text loaded into the box below — edit if needed, then index.")
+                st.rerun()
+            except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                st.error(format_api_error(e))
+            except Exception as e:
+                st.error(format_api_error(e))
+        rid = st.text_input("Resume ID", value=str(uuid.uuid4())[:8], key="idx_id")
+        title = st.text_input("Title / name", key="idx_title")
+        body = st.text_area("Resume content (paste or load from file)", height=180, key="idx_body")
+        if st.button("Index resume"):
+            if len(body.strip()) < 20:
+                st.warning("Resume content should be at least 20 characters.")
+            else:
+                try:
+                    res = post_json(
+                        "/api/match/index",
+                        {"resume_id": rid.strip(), "title": title.strip(), "content": body.strip()},
+                    )
+                    st.success(f"Indexed as `{res.get('resume_id')}` (store: {res.get('store')})")
+                except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                    st.error(format_api_error(e))
+                except Exception as e:
+                    st.error(format_api_error(e))
+    with c2:
+        st.markdown("**Job description**")
+        up_jd = st.file_uploader(
+            "Upload job description (PDF, DOCX, or TXT)",
+            type=["pdf", "docx", "txt"],
+            key="up_jd",
+        )
+        if up_jd is not None and st.button("Extract text from job file", key="btn_extract_jd"):
+            try:
+                extracted = post_file(
+                    "/api/documents/extract",
+                    "file",
+                    up_jd.getvalue(),
+                    up_jd.name or "job.txt",
+                )
+                st.session_state["jd"] = extracted.get("text", "")
+                st.success("Text loaded into the box below.")
+                st.rerun()
+            except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                st.error(format_api_error(e))
+            except Exception as e:
+                st.error(format_api_error(e))
+        jd = st.text_area("Job description (paste or load from file)", height=180, key="jd")
+        top_k = st.number_input("Top K", min_value=1, max_value=20, value=5)
+        if st.button("Run semantic match"):
+            if len(jd.strip()) < 20:
+                st.warning("Job description should be at least 20 characters.")
+            else:
+                try:
+                    res = post_json(
+                        "/api/match/query",
+                        {"job_description": jd.strip(), "top_k": int(top_k)},
+                    )
+                    st.caption(f"Vector store: {res.get('store')}")
+                    for i, row in enumerate(res.get("results") or [], start=1):
+                        with st.expander(f"#{i} — {row.get('title') or row.get('resume_id')} (score {row.get('score')})"):
+                            st.text(row.get("content", "")[:4000])
+                except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                    st.error(format_api_error(e))
+                except Exception as e:
+                    st.error(format_api_error(e))
+
+if tab_voice is not None:
+    with tab_voice:
+        st.subheader("Speech to text (OpenAI Whisper via API)")
+        up = st.file_uploader("Upload audio (mp3, wav, m4a, webm, …)", type=None)
+        if up and st.button("Transcribe"):
+            raw = up.getvalue()
+            try:
+                data = post_file("/api/voice/transcribe", "audio", raw, up.name or "clip.webm")
+                st.text_area("Transcript", value=data.get("text", ""), height=200)
+            except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                st.error(format_api_error(e))
+            except Exception as e:
+                st.error(format_api_error(e))
