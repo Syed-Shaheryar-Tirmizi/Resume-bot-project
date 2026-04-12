@@ -1,3 +1,5 @@
+import uuid
+
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
@@ -7,7 +9,6 @@ router = APIRouter(prefix="/match", tags=["match"])
 
 
 class IndexRequest(BaseModel):
-    resume_id: str = Field(..., min_length=1, max_length=128)
     title: str = Field(default="", max_length=256)
     content: str = Field(..., min_length=20)
 
@@ -43,7 +44,8 @@ _STORE = "weaviate"
 
 @router.post("/index", response_model=IndexResponse)
 def index_resume(req: IndexRequest) -> IndexResponse:
-    rid = vector_store.index_resume(req.resume_id.strip(), req.title.strip(), req.content.strip())
+    rid = str(uuid.uuid4())
+    rid = vector_store.index_resume(rid, req.title.strip(), req.content.strip())
     return IndexResponse(resume_id=rid, store=_STORE)
 
 

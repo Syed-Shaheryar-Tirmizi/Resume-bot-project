@@ -1,5 +1,4 @@
 import os
-import uuid
 
 import httpx
 import streamlit as st
@@ -216,7 +215,6 @@ with tab_match:
                 st.error(format_api_error(e))
             except Exception as e:
                 st.error(format_api_error(e))
-        rid = st.text_input("Resume ID", value=str(uuid.uuid4())[:8], key="idx_id")
         title = st.text_input("Title / name", key="idx_title")
         body = st.text_area("Resume content (paste or load from file)", height=180, key="idx_body")
         if st.button("Index resume"):
@@ -226,9 +224,9 @@ with tab_match:
                 try:
                     res = post_json(
                         "/api/match/index",
-                        {"resume_id": rid.strip(), "title": title.strip(), "content": body.strip()},
+                        {"title": title.strip(), "content": body.strip()},
                     )
-                    st.success(f"Indexed as `{res.get('resume_id')}` (store: {res.get('store')})")
+                    st.success(f"Resume indexed successfully (store: {res.get('store')}).")
                 except (httpx.HTTPStatusError, httpx.RequestError) as e:
                     st.error(format_api_error(e))
                 except Exception as e:
@@ -268,7 +266,9 @@ with tab_match:
                     )
                     st.caption(f"Vector store: {res.get('store')}")
                     for i, row in enumerate(res.get("results") or [], start=1):
-                        with st.expander(f"#{i} — {row.get('title') or row.get('resume_id')} (score {row.get('score')})"):
+                        with st.expander(
+                            f"#{i} — {row.get('title') or 'Untitled'} (score {row.get('score')})"
+                        ):
                             st.text(row.get("content", "")[:4000])
                 except (httpx.HTTPStatusError, httpx.RequestError) as e:
                     st.error(format_api_error(e))
