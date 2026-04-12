@@ -13,7 +13,7 @@ DEFAULT_API = os.environ.get("RESUME_INSIGHT_API", "http://127.0.0.1:8000")
 
 
 def api_base() -> str:
-    return st.session_state.get("api_base", DEFAULT_API).rstrip("/")
+    return DEFAULT_API.rstrip("/")
 
 
 @st.cache_data(ttl=15, show_spinner=False)
@@ -138,16 +138,19 @@ def index_title_for_resume_upload(
 
 
 def _inject_app_theme_css() -> None:
-    """Polish beyond theme colors: depth, sidebar edge, header strip."""
+    """Polish beyond theme colors; hide Streamlit sidebar (no sidebar UI)."""
     st.markdown(
         """
         <style>
             .stApp {
                 background: linear-gradient(165deg, #0b1120 0%, #0f172a 40%, #111827 100%);
             }
-            [data-testid="stSidebar"] {
-                background: linear-gradient(180deg, #172033 0%, #0f172a 100%);
-                border-right: 1px solid rgba(45, 212, 191, 0.14);
+            [data-testid="stSidebar"],
+            [data-testid="collapsedControl"] {
+                display: none !important;
+            }
+            [data-testid="stAppViewContainer"] > .main {
+                margin-left: 0 !important;
             }
             [data-testid="stHeader"] {
                 background: rgba(15, 23, 42, 0.92);
@@ -169,7 +172,11 @@ def _inject_app_theme_css() -> None:
     )
 
 
-st.set_page_config(page_title="Resume Insight AI", layout="wide")
+st.set_page_config(
+    page_title="Resume Insight AI",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
 _inject_app_theme_css()
 st.title("Resume Insight AI")
 st.caption(
@@ -181,21 +188,10 @@ st.caption(
     )
 )
 
-if "api_base" not in st.session_state:
-    st.session_state.api_base = DEFAULT_API
 if "chat_messages" not in st.session_state:
     st.session_state.chat_messages = []
 if "export_docx" not in st.session_state:
     st.session_state.export_docx = None
-
-with st.sidebar:
-    st.session_state.api_base = st.text_input("API base URL", value=st.session_state.api_base)
-    st.markdown("**Backend**")
-    st.markdown("- Run **Weaviate** locally or use **Weaviate Cloud** — see `.env.example`")
-    st.markdown("- `python -m uvicorn backend.main:app --reload`")
-    st.markdown("- Set `OPENAI_API_KEY` in `.env`")
-    if st.button("Refresh status", help="Re-check /ready immediately"):
-        fetch_ready_status.clear()
 
 ready_ok, ready_msgs = fetch_ready_status(api_base())
 if not ready_ok:
@@ -455,7 +451,7 @@ with tab_match:
             title = (row.get("title") or "").strip() or "Untitled"
             rid = row.get("resume_id") or ""
             content = row.get("content") or ""
-            with st.expander(f"#{i} — {title} (score {row.get('score')})"):
+            with st.expander(f"#{i} — {title}"):
                 docx_key = f"match_docx_{rid}_{i}"
                 dl1, dl2 = st.columns(2)
                 with dl1:
