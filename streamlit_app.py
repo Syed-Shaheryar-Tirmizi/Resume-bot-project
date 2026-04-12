@@ -50,6 +50,28 @@ def post_file(path: str, field: str, file_bytes: bytes, filename: str) -> dict:
         return r.json()
 
 
+def post_match_index_file(title: str, file_bytes: bytes, filename: str) -> dict:
+    with httpx.Client(timeout=120.0) as client:
+        r = client.post(
+            f"{api_base()}/api/match/index-file",
+            data={"title": title.strip()},
+            files={"file": (filename or "resume.pdf", file_bytes)},
+        )
+        r.raise_for_status()
+        return r.json()
+
+
+def post_match_query_file(file_bytes: bytes, filename: str, top_k: int) -> dict:
+    with httpx.Client(timeout=120.0) as client:
+        r = client.post(
+            f"{api_base()}/api/match/query-file",
+            data={"top_k": str(int(top_k))},
+            files={"file": (filename or "job.txt", file_bytes)},
+        )
+        r.raise_for_status()
+        return r.json()
+
+
 def get_json(path: str) -> dict:
     with httpx.Client(timeout=60.0) as client:
         r = client.get(f"{api_base()}{path}")
@@ -221,30 +243,39 @@ with tab_match:
     with c1:
         st.markdown("**Your resume**")
         up_resume = st.file_uploader(
-            "Upload resume (PDF, DOCX, or TXT)",
+            "Upload resume (PDF, DOCX, or TXT) — indexed directly on the server (no separate extract step)",
             type=["pdf", "docx", "txt"],
             key="up_resume",
         )
-        if up_resume is not None and st.button("Extract text from resume file", key="btn_extract_resume"):
-            try:
-                extracted = post_file(
-                    "/api/documents/extract",
-                    "file",
-                    up_resume.getvalue(),
-                    up_resume.name or "resume.pdf",
-                )
-                st.session_state["idx_body"] = extracted.get("text", "")
-                st.success("Text loaded into the box below — edit if needed, then index.")
-                st.rerun()
-            except (httpx.HTTPStatusError, httpx.RequestError) as e:
-                st.error(format_api_error(e))
-            except Exception as e:
-                st.error(format_api_error(e))
         title = st.text_input("Title / name (required)", key="idx_title")
-        body = st.text_area("Resume content (paste or load from file)", height=180, key="idx_body")
-        if st.button("Index resume"):
+        if up_resume is not None:
+            if st.button("Index from uploaded file", key="btn_index_resume_file"):
+                if not title.strip():
+                    st.warning(
+                        "Please enter a title or name for this resume. It is used to label your resume in match results."
+                    )
+                else:
+                    try:
+                        res = post_match_index_file(
+                            title.strip(),
+                            up_resume.getvalue(),
+                            up_resume.name or "resume.pdf",
+                        )
+                        st.success(f"Resume indexed successfully (store: {res.get('store')}).")
+                    except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                        st.error(format_api_error(e))
+                    except Exception as e:
+                        st.error(format_api_error(e))
+        body = st.text_area(
+            "Or paste resume text here and use “Index from text”",
+            height=180,
+            key="idx_body",
+        )
+        if st.button("Index from text"):
             if not title.strip():
-                st.warning("Please enter a title or name for this resume. It is used to label your resume in match results.")
+                st.warning(
+                    "Please enter a title or name for this resume. It is used to label your resume in match results."
+                )
             elif len(body.strip()) < 20:
                 st.warning("Resume content should be at least 20 characters.")
             else:
@@ -261,28 +292,34 @@ with tab_match:
     with c2:
         st.markdown("**Job description**")
         up_jd = st.file_uploader(
-            "Upload job description (PDF, DOCX, or TXT)",
+            "Upload job description (PDF, DOCX, or TXT) — matched directly on the server (no separate extract step)",
             type=["pdf", "docx", "txt"],
             key="up_jd",
         )
-        if up_jd is not None and st.button("Extract text from job file", key="btn_extract_jd"):
-            try:
-                extracted = post_file(
-                    "/api/documents/extract",
-                    "file",
-                    up_jd.getvalue(),
-                    up_jd.name or "job.txt",
-                )
-                st.session_state["jd"] = extracted.get("text", "")
-                st.success("Text loaded into the box below.")
-                st.rerun()
-            except (httpx.HTTPStatusError, httpx.RequestError) as e:
-                st.error(format_api_error(e))
-            except Exception as e:
-                st.error(format_api_error(e))
-        jd = st.text_area("Job description (paste or load from file)", height=180, key="jd")
-        top_k = st.number_input("Top K", min_value=1, max_value=20, value=5)
-        if st.button("Run semantic match"):
+        if up_jd is not None:
+            if st.button("Run semantic match from uploaded file", key="btn_match_jd_file"):
+                try:
+                    tk = int(st.session_state.get("match_top_k", 5))
+                    res = post_match_query_file(
+                        up_jd.getvalue(),
+                        up_jd.name or "job.txt",
+                        tk,
+                    )
+                    for k in list(st.session_state.keys()):
+                        if isinstance(k, str) and k.startswith("match_docx_"):
+                            del st.session_state[k]
+                    st.session_state["last_match_result"] = res
+                except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                    st.error(format_api_error(e))
+                except Exception as e:
+                    st.error(format_api_error(e))
+        top_k = st.number_input("Top K", min_value=1, max_value=20, value=5, key="match_top_k")
+        jd = st.text_area(
+            "Or paste job description here and use “Run semantic match (from text)”",
+            height=180,
+            key="jd",
+        )
+        if st.button("Run semantic match (from text)"):
             if len(jd.strip()) < 20:
                 st.warning("Job description should be at least 20 characters.")
             else:

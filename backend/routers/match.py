@@ -1,8 +1,9 @@
 import uuid
 
-from fastapi import APIRouter
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field, field_validator
 
+from backend.services import documents as doc_svc
 from backend.services import vector_store
 
 router = APIRouter(prefix="/match", tags=["match"])
@@ -57,10 +58,53 @@ class ListResumesResponse(BaseModel):
 _STORE = "weaviate"
 
 
+def _build_match_response(job_description: str, top_k: int) -> MatchResponse:
+    results = vector_store.match_job(job_description.strip(), top_k=top_k)
+    return MatchResponse(
+        results=[
+            MatchItem(
+                resume_id=r.resume_id,
+                title=r.title,
+                content=r.content[:8000] if len(r.content) > 8000 else r.content,
+                score=round(r.score, 6),
+            )
+            for r in results
+        ],
+        store=_STORE,
+    )
+
+
 @router.post("/index", response_model=IndexResponse)
 def index_resume(req: IndexRequest) -> IndexResponse:
     rid = str(uuid.uuid4())
     rid = vector_store.index_resume(rid, req.title.strip(), req.content.strip())
+    return IndexResponse(resume_id=rid, store=_STORE)
+
+
+@router.post("/index-file", response_model=IndexResponse)
+async def index_resume_file(
+    title: str = Form(..., min_length=1, max_length=256),
+    file: UploadFile = File(...),
+) -> IndexResponse:
+    """Upload a resume file (PDF/DOCX/TXT); text is extracted on the server and indexed in one step."""
+    data = await file.read()
+    try:
+        text = doc_svc.extract_text_from_upload(data, file.filename or "")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    title_clean = title.strip()
+    if not title_clean:
+        raise HTTPException(status_code=422, detail="title must not be empty")
+    content = text.strip()
+    if len(content) < 20:
+        raise HTTPException(
+            status_code=422,
+            detail="extracted text must be at least 20 characters",
+        )
+    rid = str(uuid.uuid4())
+    rid = vector_store.index_resume(rid, title_clean, content)
     return IndexResponse(resume_id=rid, store=_STORE)
 
 
@@ -88,19 +132,29 @@ def delete_all_resumes() -> dict:
 
 @router.post("/query", response_model=MatchResponse)
 def match_job(req: MatchRequest) -> MatchResponse:
-    results = vector_store.match_job(req.job_description.strip(), top_k=req.top_k)
-    return MatchResponse(
-        results=[
-            MatchItem(
-                resume_id=r.resume_id,
-                title=r.title,
-                content=r.content[:8000] if len(r.content) > 8000 else r.content,
-                score=round(r.score, 6),
-            )
-            for r in results
-        ],
-        store=_STORE,
-    )
+    return _build_match_response(req.job_description, req.top_k)
+
+
+@router.post("/query-file", response_model=MatchResponse)
+async def match_job_file(
+    top_k: int = Form(5, ge=1, le=50),
+    file: UploadFile = File(...),
+) -> MatchResponse:
+    """Upload a job description file (PDF/DOCX/TXT); text is extracted on the server and used for semantic match."""
+    data = await file.read()
+    try:
+        text = doc_svc.extract_text_from_upload(data, file.filename or "")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    jd = text.strip()
+    if len(jd) < 20:
+        raise HTTPException(
+            status_code=422,
+            detail="extracted job description must be at least 20 characters",
+        )
+    return _build_match_response(jd, top_k)
 
 
 @router.delete("/{resume_id}")

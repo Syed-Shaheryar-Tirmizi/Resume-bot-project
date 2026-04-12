@@ -25,20 +25,10 @@ def export_resume_docx(req: ResumeExportRequest) -> Response:
 @router.post("/extract")
 async def extract_text(file: UploadFile = File(...)) -> dict:
     data = await file.read()
-    if not data:
-        raise HTTPException(status_code=400, detail="empty file")
-    name = (file.filename or "").lower()
     try:
-        if name.endswith(".pdf"):
-            text = doc_svc.extract_text_from_pdf(data)
-        elif name.endswith(".docx"):
-            text = doc_svc.extract_text_from_docx(data)
-        elif name.endswith(".txt"):
-            text = data.decode("utf-8", errors="replace").strip()
-        else:
-            raise HTTPException(status_code=400, detail="use .pdf, .docx, or .txt")
-    except HTTPException:
-        raise
+        text = doc_svc.extract_text_from_upload(data, file.filename or "")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
     return {"text": text, "filename": file.filename}
