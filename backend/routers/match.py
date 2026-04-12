@@ -1,7 +1,7 @@
 import uuid
 
 from fastapi import APIRouter
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from backend.services import vector_store
 
@@ -9,8 +9,16 @@ router = APIRouter(prefix="/match", tags=["match"])
 
 
 class IndexRequest(BaseModel):
-    title: str = Field(default="", max_length=256)
+    title: str = Field(..., min_length=1, max_length=256)
     content: str = Field(..., min_length=20)
+
+    @field_validator("title")
+    @classmethod
+    def title_not_blank(cls, v: str) -> str:
+        s = v.strip()
+        if not s:
+            raise ValueError("title must not be empty or whitespace only")
+        return s
 
 
 class IndexResponse(BaseModel):
@@ -35,8 +43,15 @@ class MatchResponse(BaseModel):
     store: str
 
 
-class DeleteRequest(BaseModel):
-    resume_id: str = Field(..., min_length=1, max_length=128)
+class StoredResumeItem(BaseModel):
+    resume_id: str
+    title: str
+    content_excerpt: str
+
+
+class ListResumesResponse(BaseModel):
+    resumes: list[StoredResumeItem]
+    store: str
 
 
 _STORE = "weaviate"
@@ -47,6 +62,28 @@ def index_resume(req: IndexRequest) -> IndexResponse:
     rid = str(uuid.uuid4())
     rid = vector_store.index_resume(rid, req.title.strip(), req.content.strip())
     return IndexResponse(resume_id=rid, store=_STORE)
+
+
+@router.get("/resumes", response_model=ListResumesResponse)
+def list_resumes() -> ListResumesResponse:
+    rows = vector_store.list_stored_resumes()
+    return ListResumesResponse(
+        resumes=[
+            StoredResumeItem(
+                resume_id=r.resume_id,
+                title=r.title,
+                content_excerpt=r.content_excerpt,
+            )
+            for r in rows
+        ],
+        store=_STORE,
+    )
+
+
+@router.delete("/resumes")
+def delete_all_resumes() -> dict:
+    n = vector_store.clear_all_resumes()
+    return {"ok": True, "deleted": n, "store": _STORE}
 
 
 @router.post("/query", response_model=MatchResponse)

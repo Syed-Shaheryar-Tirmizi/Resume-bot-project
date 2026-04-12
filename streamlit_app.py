@@ -49,6 +49,22 @@ def post_file(path: str, field: str, file_bytes: bytes, filename: str) -> dict:
         return r.json()
 
 
+def get_json(path: str) -> dict:
+    with httpx.Client(timeout=60.0) as client:
+        r = client.get(f"{api_base()}{path}")
+        r.raise_for_status()
+        return r.json()
+
+
+def delete_json(path: str) -> dict:
+    with httpx.Client(timeout=120.0) as client:
+        r = client.delete(f"{api_base()}{path}")
+        r.raise_for_status()
+        if r.content:
+            return r.json()
+        return {}
+
+
 def post_export_docx(content: str) -> bytes:
     with httpx.Client(timeout=120.0) as client:
         r = client.post(
@@ -104,6 +120,7 @@ _tab_labels = ["Resume chatbot"]
 if settings.enable_cv_domain_transform:
     _tab_labels.append("Domain transform")
 _tab_labels.append("Semantic matching")
+_tab_labels.append("Stored resumes")
 if settings.enable_voice_input:
     _tab_labels.append("Voice (Whisper)")
 _tab_widgets = st.tabs(_tab_labels)
@@ -115,6 +132,8 @@ if settings.enable_cv_domain_transform:
     tab_xform = _tab_widgets[_i]
     _i += 1
 tab_match = _tab_widgets[_i]
+_i += 1
+tab_stored = _tab_widgets[_i]
 _i += 1
 tab_voice = None
 if settings.enable_voice_input:
@@ -215,10 +234,12 @@ with tab_match:
                 st.error(format_api_error(e))
             except Exception as e:
                 st.error(format_api_error(e))
-        title = st.text_input("Title / name", key="idx_title")
+        title = st.text_input("Title / name (required)", key="idx_title")
         body = st.text_area("Resume content (paste or load from file)", height=180, key="idx_body")
         if st.button("Index resume"):
-            if len(body.strip()) < 20:
+            if not title.strip():
+                st.warning("Please enter a title or name for this resume. It is used to label your resume in match results.")
+            elif len(body.strip()) < 20:
                 st.warning("Resume content should be at least 20 characters.")
             else:
                 try:
@@ -274,6 +295,66 @@ with tab_match:
                     st.error(format_api_error(e))
                 except Exception as e:
                     st.error(format_api_error(e))
+
+with tab_stored:
+    st.subheader("Stored resumes")
+    st.caption(
+        "Indexed resumes used for semantic matching. Delete entries you no longer need, or clear the whole list."
+    )
+    if not ready_ok:
+        st.info("When the API is ready (see status above), you can view and manage indexed resumes here.")
+    else:
+        head_a, head_b = st.columns([1, 2])
+        with head_a:
+            st.button("Refresh list", key="btn_refresh_stored", help="Reload from the vector store")
+        with head_b:
+            confirm_all = st.checkbox(
+                "I understand that deleting all stored resumes cannot be undone.",
+                key="chk_delete_all_stored",
+            )
+            if st.button("Delete all stored resumes", disabled=not confirm_all, key="btn_delete_all_stored"):
+                try:
+                    cleared = delete_json("/api/match/resumes")
+                    n = int(cleared.get("deleted", 0))
+                    st.success(f"Removed {n} resume(s) from the store ({cleared.get('store', '')}).")
+                except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                    st.error(format_api_error(e))
+                except Exception as e:
+                    st.error(format_api_error(e))
+
+        try:
+            listing = get_json("/api/match/resumes")
+        except (httpx.HTTPStatusError, httpx.RequestError) as e:
+            st.error(format_api_error(e))
+            listing = None
+        except Exception as e:
+            st.error(format_api_error(e))
+            listing = None
+        if listing is not None:
+            rows = listing.get("resumes") or []
+            st.caption(f"Vector store: {listing.get('store', '')} — {len(rows)} resume(s).")
+            if not rows:
+                st.info("No resumes indexed yet. Add one under **Semantic matching**.")
+            else:
+                for item in rows:
+                    rid = item.get("resume_id") or ""
+                    title = (item.get("title") or "").strip() or "Untitled"
+                    excerpt = item.get("content_excerpt") or ""
+                    col_l, col_r = st.columns([5, 1])
+                    with col_l:
+                        st.markdown(f"**{title}**")
+                        if excerpt:
+                            st.caption(excerpt)
+                    with col_r:
+                        if rid and st.button("Delete", key=f"del_stored_{rid}"):
+                            try:
+                                delete_json(f"/api/match/{rid}")
+                                st.rerun()
+                            except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                                st.error(format_api_error(e))
+                            except Exception as e:
+                                st.error(format_api_error(e))
+                    st.divider()
 
 if tab_voice is not None:
     with tab_voice:

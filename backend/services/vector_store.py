@@ -31,6 +31,13 @@ class MatchResult:
     score: float
 
 
+@dataclass
+class StoredResumeInfo:
+    resume_id: str
+    title: str
+    content_excerpt: str
+
+
 def _connect() -> weaviate.WeaviateClient:
     if settings.weaviate_cloud_mode():
         if not settings.weaviate_api_key:
@@ -179,6 +186,50 @@ def remove_resume(resume_id: str) -> None:
         pass
 
 
+_EXCERPT_LEN = 400
+
+
+def list_stored_resumes() -> list[StoredResumeInfo]:
+    """Return all indexed resumes (title + excerpt; full text stays in Weaviate)."""
+    client = _require_client()
+    coll = client.collections.get(COLLECTION)
+    out: list[StoredResumeInfo] = []
+    try:
+        for obj in coll.iterator(include_vector=False):
+            props = obj.properties or {}
+            rid = str(props.get("resume_id", ""))
+            title = str(props.get("title", ""))
+            content = str(props.get("content", ""))
+            if not rid:
+                continue
+            excerpt = content[:_EXCERPT_LEN] + ("…" if len(content) > _EXCERPT_LEN else "")
+            out.append(StoredResumeInfo(resume_id=rid, title=title, content_excerpt=excerpt))
+    except Exception as e:
+        logger.exception("Weaviate list resumes failed")
+        raise weaviate_unavailable(f"Failed to list resumes: {e}") from e
+    out.sort(key=lambda x: (x.title.lower(), x.resume_id))
+    return out
+
+
+def clear_all_resumes() -> int:
+    """Delete every object in the resume collection. Returns number of objects removed."""
+    client = _require_client()
+    coll = client.collections.get(COLLECTION)
+    try:
+        ids = [obj.uuid for obj in coll.iterator(include_vector=False)]
+    except Exception as e:
+        logger.exception("Weaviate clear all resumes failed (listing)")
+        raise weaviate_unavailable(f"Failed to delete all resumes: {e}") from e
+    deleted = 0
+    for uid in ids:
+        try:
+            coll.data.delete_by_id(uid)
+            deleted += 1
+        except Exception:
+            logger.warning("Failed to delete object %s", uid, exc_info=True)
+    return deleted
+
+
 def match_job(job_text: str, top_k: int = 5) -> list[MatchResult]:
     from backend.services.embeddings import embed_texts
 
@@ -208,4 +259,4 @@ def match_job(job_text: str, top_k: int = 5) -> list[MatchResult]:
                 score=score,
             )
         )
-        return out
+    return out
