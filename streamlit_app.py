@@ -1,4 +1,5 @@
 import os
+import re
 
 import httpx
 import streamlit as st
@@ -80,6 +81,11 @@ def last_assistant_text() -> str:
         if m["role"] == "assistant":
             return m["content"]
     return ""
+
+
+def safe_resume_filename(title: str, index: int, ext: str) -> str:
+    base = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", (title or "").strip()) or f"resume-{index}"
+    return (base[:120] if len(base) > 120 else base) + ext
 
 
 st.set_page_config(page_title="Resume Insight AI", layout="wide")
@@ -285,16 +291,69 @@ with tab_match:
                         "/api/match/query",
                         {"job_description": jd.strip(), "top_k": int(top_k)},
                     )
-                    st.caption(f"Vector store: {res.get('store')}")
-                    for i, row in enumerate(res.get("results") or [], start=1):
-                        with st.expander(
-                            f"#{i} — {row.get('title') or 'Untitled'} (score {row.get('score')})"
-                        ):
-                            st.text(row.get("content", "")[:4000])
+                    for k in list(st.session_state.keys()):
+                        if isinstance(k, str) and k.startswith("match_docx_"):
+                            del st.session_state[k]
+                    st.session_state["last_match_result"] = res
                 except (httpx.HTTPStatusError, httpx.RequestError) as e:
                     st.error(format_api_error(e))
                 except Exception as e:
                     st.error(format_api_error(e))
+
+    match_res = st.session_state.get("last_match_result")
+    if match_res:
+        st.divider()
+        mr1, mr2 = st.columns([4, 1])
+        with mr1:
+            st.markdown("**Match results**")
+        with mr2:
+            if st.button("Clear results", key="btn_clear_match_results"):
+                del st.session_state["last_match_result"]
+                for k in list(st.session_state.keys()):
+                    if isinstance(k, str) and k.startswith("match_docx_"):
+                        del st.session_state[k]
+                st.rerun()
+        st.caption(
+            f"Vector store: {match_res.get('store')} — text in each result may be truncated by the server (up to ~8k characters)."
+        )
+        for i, row in enumerate(match_res.get("results") or [], start=1):
+            title = (row.get("title") or "").strip() or "Untitled"
+            rid = row.get("resume_id") or ""
+            content = row.get("content") or ""
+            with st.expander(f"#{i} — {title} (score {row.get('score')})"):
+                docx_key = f"match_docx_{rid}_{i}"
+                dl1, dl2 = st.columns(2)
+                with dl1:
+                    st.download_button(
+                        label="Download .txt",
+                        data=content.encode("utf-8"),
+                        file_name=safe_resume_filename(title, i, ".txt"),
+                        mime="text/plain",
+                        key=f"match_dl_txt_{i}_{rid}",
+                    )
+                with dl2:
+                    if docx_key in st.session_state:
+                        st.download_button(
+                            label="Download Word (.docx)",
+                            data=st.session_state[docx_key],
+                            file_name=safe_resume_filename(title, i, ".docx"),
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            key=f"match_dl_docx_{i}_{rid}",
+                        )
+                    elif st.button(
+                        "Build Word (.docx)",
+                        key=f"match_prep_docx_{i}_{rid}",
+                        help="Creates a formatted Word file from this match result.",
+                    ):
+                        try:
+                            st.session_state[docx_key] = post_export_docx(content)
+                        except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                            st.error(format_api_error(e))
+                        except Exception as e:
+                            st.error(format_api_error(e))
+                        else:
+                            st.rerun()
+                st.text(content[:4000] + ("…" if len(content) > 4000 else ""))
 
 with tab_stored:
     st.subheader("Stored resumes")
