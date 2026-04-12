@@ -137,7 +137,40 @@ def index_title_for_resume_upload(
     return combined[:256]
 
 
+def _inject_app_theme_css() -> None:
+    """Polish beyond theme colors: depth, sidebar edge, header strip."""
+    st.markdown(
+        """
+        <style>
+            .stApp {
+                background: linear-gradient(165deg, #0b1120 0%, #0f172a 40%, #111827 100%);
+            }
+            [data-testid="stSidebar"] {
+                background: linear-gradient(180deg, #172033 0%, #0f172a 100%);
+                border-right: 1px solid rgba(45, 212, 191, 0.14);
+            }
+            [data-testid="stHeader"] {
+                background: rgba(15, 23, 42, 0.92);
+                border-bottom: 1px solid rgba(45, 212, 191, 0.12);
+            }
+            .stTabs [data-baseweb="tab-list"] {
+                gap: 0.5rem;
+                background-color: rgba(30, 41, 59, 0.6);
+                border-radius: 0.5rem;
+                padding: 0.25rem 0.35rem;
+            }
+            .stTabs [aria-selected="true"] {
+                background: rgba(45, 212, 191, 0.15) !important;
+                border-radius: 0.35rem;
+            }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 st.set_page_config(page_title="Resume Insight AI", layout="wide")
+_inject_app_theme_css()
 st.title("Resume Insight AI")
 st.caption(
     "AI resume creation and semantic matching (Weaviate required)."
