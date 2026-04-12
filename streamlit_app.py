@@ -1,5 +1,7 @@
 import os
 import re
+from pathlib import Path
+from typing import Optional
 
 import httpx
 import streamlit as st
@@ -108,6 +110,31 @@ def last_assistant_text() -> str:
 def safe_resume_filename(title: str, index: int, ext: str) -> str:
     base = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", (title or "").strip()) or f"resume-{index}"
     return (base[:120] if len(base) > 120 else base) + ext
+
+
+def index_title_for_resume_upload(
+    uploaded_name: str,
+    file_index: int,
+    user_title: str,
+    total_files: int,
+) -> Optional[str]:
+    """
+    Build the resume title for the index API.
+    One file: user_title must be non-empty (same as manual index).
+    Several files: each title is filename stem, optionally prefixed by user_title.
+    """
+    user = user_title.strip()
+    raw_stem = Path(uploaded_name or "").stem.strip()
+    stem = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", raw_stem) or f"resume-{file_index}"
+    if total_files == 1:
+        if not user:
+            return None
+        return user[:256]
+    if user:
+        combined = f"{user} – {stem}"
+    else:
+        combined = stem
+    return combined[:256]
 
 
 st.set_page_config(page_title="Resume Insight AI", layout="wide")
@@ -243,29 +270,67 @@ with tab_match:
     with c1:
         st.markdown("**Your resume**")
         up_resume = st.file_uploader(
-            "Upload resume (PDF, DOCX, or TXT) — indexed directly on the server (no separate extract step)",
+            "Upload one or more resumes (PDF, DOCX, or TXT) — indexed directly on the server (no separate extract step)",
             type=["pdf", "docx", "txt"],
             key="up_resume",
+            accept_multiple_files=True,
         )
-        title = st.text_input("Title / name (required)", key="idx_title")
-        if up_resume is not None:
-            if st.button("Index from uploaded file", key="btn_index_resume_file"):
-                if not title.strip():
+        title = st.text_input(
+            "Title / name (required for a single file; optional prefix when uploading several)",
+            key="idx_title",
+        )
+        if up_resume:
+            n_files = len(up_resume)
+            btn_label = (
+                "Index from uploaded file"
+                if n_files == 1
+                else f"Index all uploaded files ({n_files})"
+            )
+            if n_files > 1:
+                st.caption(
+                    "With multiple files, each resume is titled using its file name (without extension). "
+                    "If you enter text in the field above, it is added as a prefix for every file."
+                )
+            if st.button(btn_label, key="btn_index_resume_file"):
+                if n_files == 1 and not title.strip():
                     st.warning(
                         "Please enter a title or name for this resume. It is used to label your resume in match results."
                     )
                 else:
-                    try:
-                        res = post_match_index_file(
-                            title.strip(),
-                            up_resume.getvalue(),
-                            up_resume.name or "resume.pdf",
+                    ok = 0
+                    store = None
+                    errs = []
+                    for i, uf in enumerate(up_resume, start=1):
+                        t = index_title_for_resume_upload(uf.name or "", i, title, n_files)
+                        if t is None:
+                            st.warning(
+                                "Please enter a title or name for this resume. It is used to label your resume in match results."
+                            )
+                            break
+                        try:
+                            res = post_match_index_file(
+                                t,
+                                uf.getvalue(),
+                                uf.name or "resume.pdf",
+                            )
+                            ok += 1
+                            store = res.get("store")
+                        except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                            errs.append(f"{uf.name or 'file'}: {format_api_error(e)}")
+                        except Exception as e:
+                            errs.append(f"{uf.name or 'file'}: {format_api_error(e)}")
+                    if ok and not errs:
+                        st.success(
+                            f"Indexed {ok} resume(s) successfully"
+                            + (f" (store: {store})." if store else ".")
                         )
-                        st.success(f"Resume indexed successfully (store: {res.get('store')}).")
-                    except (httpx.HTTPStatusError, httpx.RequestError) as e:
-                        st.error(format_api_error(e))
-                    except Exception as e:
-                        st.error(format_api_error(e))
+                    elif ok and errs:
+                        st.success(f"Indexed {ok} resume(s) (store: {store}). Some files failed:")
+                        for err in errs:
+                            st.error(err)
+                    elif errs:
+                        for err in errs:
+                            st.error(err)
         body = st.text_area(
             "Or paste resume text here and use “Index from text”",
             height=180,
