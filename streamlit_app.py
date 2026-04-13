@@ -138,34 +138,207 @@ def index_title_for_resume_upload(
 
 
 def _inject_app_theme_css() -> None:
-    """Polish beyond theme colors; hide Streamlit sidebar (no sidebar UI)."""
     st.markdown(
         """
         <style>
-            .stApp {
-                background: linear-gradient(165deg, #0b1120 0%, #0f172a 40%, #111827 100%);
-            }
+            .stApp { background: #F8FAFC; }
+
             [data-testid="stSidebar"],
-            [data-testid="collapsedControl"] {
-                display: none !important;
-            }
-            [data-testid="stAppViewContainer"] > .main {
-                margin-left: 0 !important;
-            }
+            [data-testid="collapsedControl"] { display: none !important; }
+
+            /* ══════════════════════════════
+               HEADER — navy bar + amber underline
+            ══════════════════════════════ */
             [data-testid="stHeader"] {
-                background: rgba(15, 23, 42, 0.92);
-                border-bottom: 1px solid rgba(45, 212, 191, 0.12);
+                background: #1E3A5F !important;
+                border-bottom: 3px solid #F59E0B !important;
             }
+            /* Streamlit injects a Deploy button area — keep it visible */
+            [data-testid="stHeader"] button,
+            [data-testid="stHeader"] a { color: #F1F5F9 !important; }
+
+            /* ── Title and caption that appear below the header ── */
+            .stApp .stMarkdown h1,
+            .stApp h1 {
+                color: #1E3A5F !important;
+                font-size: 26px;
+                font-weight: 700;
+                border-left: 4px solid #F59E0B;
+                padding-left: 12px;
+                margin-bottom: 4px;
+            }
+            .stApp .stCaption p,
+            .stCaption {
+                color: #64748B !important;
+                font-size: 12px;
+            }
+
+            /* ══════════════════════════════
+               TABS
+            ══════════════════════════════ */
             .stTabs [data-baseweb="tab-list"] {
-                gap: 0.5rem;
-                background-color: rgba(30, 41, 59, 0.6);
-                border-radius: 0.5rem;
-                padding: 0.25rem 0.35rem;
+                gap: 4px;
+                background: #1E3A5F;
+                border: 1px solid #2D4F7A;
+                border-radius: 12px;
+                padding: 5px;
+            }
+            .stTabs [data-baseweb="tab"] {
+                border-radius: 8px;
+                font-size: 13px;
+                font-weight: 500;
+                color: #93B4D4 !important;
+                padding: 9px 22px;
+                background: transparent !important;
             }
             .stTabs [aria-selected="true"] {
-                background: rgba(45, 212, 191, 0.15) !important;
-                border-radius: 0.35rem;
+                background: #F59E0B !important;
+                color: #1C1400 !important;
+                font-weight: 600 !important;
+                border-radius: 8px !important;
+                border: none !important;
+                box-shadow: 0 2px 8px rgba(245,158,11,0.35) !important;
             }
+            .stTabs [data-baseweb="tab"]:hover:not([aria-selected="true"]) {
+                background: rgba(255,255,255,0.1) !important;
+                color: #E2EEF9 !important;
+            }
+            .stTabs [data-baseweb="tab-highlight"],
+            .stTabs [data-baseweb="tab-border"] { display: none; }
+
+            /* ══════════════════════════════
+               CHAT — container + bubbles
+            ══════════════════════════════ */
+
+            /* Outer chat wrapper */
+            [data-testid="stChatMessageContainer"] {
+                border: 2px solid #1E3A5F !important;
+                border-radius: 14px !important;
+                background: #EFF4FA !important;
+                padding: 12px !important;
+            }
+
+            /* Input bar at bottom of chat */
+            [data-testid="stChatInput"] {
+                border: 2px solid #1E3A5F !important;
+                border-top: 2px solid #1E3A5F !important;
+                border-radius: 10px !important;
+                background: #ffffff !important;
+            }
+            [data-testid="stChatInput"] textarea {
+                background: #ffffff !important;
+                font-size: 13px;
+                color: #0F172A;
+            }
+
+            /* USER bubble */
+            [data-testid="stChatMessage"][data-testid*="user"],
+            div[data-testid="stChatMessage"]:has(img[alt="user avatar"]) {
+                background: #1E3A5F !important;
+                border: 1.5px solid #2D4F7A !important;
+                border-radius: 12px !important;
+                border-top-right-radius: 3px !important;
+                padding: 12px 14px !important;
+                margin-left: auto;
+                margin-right: 0;
+                max-width: 80%;
+                color: #F1F5F9 !important;
+            }
+            [data-testid="stChatMessage"]:has(img[alt="user avatar"]) * {
+                color: #F1F5F9 !important;
+            }
+
+            /* ASSISTANT bubble */
+            [data-testid="stChatMessage"]:has(img[alt="assistant avatar"]),
+            [data-testid="stChatMessage"]:not(:has(img[alt="user avatar"])) {
+                background: #ffffff !important;
+                border: 1.5px solid #B8CFEA !important;
+                border-radius: 12px !important;
+                border-top-left-radius: 3px !important;
+                padding: 12px 14px !important;
+                margin-right: auto;
+                max-width: 80%;
+            }
+
+            /* Fallback: alternate rows if :has() not supported */
+            [data-testid="stChatMessage"]:nth-child(odd) {
+                background: #ffffff;
+                border: 1.5px solid #B8CFEA;
+                border-radius: 12px;
+                margin-bottom: 10px;
+            }
+            [data-testid="stChatMessage"]:nth-child(even) {
+                background: #1E3A5F;
+                border: 1.5px solid #2D4F7A;
+                border-radius: 12px;
+                margin-bottom: 10px;
+                color: #F1F5F9;
+            }
+            [data-testid="stChatMessage"]:nth-child(even) * {
+                color: #F1F5F9 !important;
+            }
+
+            /* ══════════════════════════════
+               BUTTONS
+            ══════════════════════════════ */
+            button[kind="primary"],
+            .stButton > button[kind="primary"] {
+                background: #1E3A5F !important;
+                color: #F1F5F9 !important;
+                border: none;
+                border-radius: 9px;
+                font-weight: 500;
+            }
+            .stButton > button {
+                background: #ffffff;
+                color: #1E3A5F;
+                border: 1.5px solid #B8CFEA;
+                border-radius: 9px;
+                font-size: 13px;
+                font-weight: 500;
+            }
+            .stButton > button:hover { background: #EEF3F9; }
+            .stDownloadButton > button {
+                background: #F0FDF4 !important;
+                border: 1.5px solid #BBF7D0 !important;
+                color: #166534 !important;
+                border-radius: 9px;
+            }
+
+            /* ══════════════════════════════
+               INPUTS / FORMS
+            ══════════════════════════════ */
+            .stTextInput input,
+            .stTextArea textarea,
+            .stNumberInput input {
+                background: #ffffff;
+                border: 1.5px solid #B8CFEA !important;
+                border-radius: 9px;
+                font-size: 13px;
+                color: #0F172A;
+            }
+            .stTextInput input:focus,
+            .stTextArea textarea:focus {
+                border-color: #1E3A5F !important;
+                box-shadow: 0 0 0 3px rgba(30,58,95,0.1) !important;
+            }
+            [data-testid="stFileUploader"] {
+                border: 1.5px dashed #B8CFEA !important;
+                border-radius: 10px;
+                background: #F0F5FA;
+            }
+            .streamlit-expanderHeader {
+                border: 1.5px solid #B8CFEA !important;
+                border-radius: 10px;
+            }
+            .streamlit-expanderContent {
+                border: 1.5px solid #B8CFEA !important;
+                border-top: none !important;
+                border-radius: 0 0 10px 10px;
+            }
+
+            hr { border-color: #DBEAFE; border-width: 1px; }
+            .block-container { padding-top: 1.5rem; padding-bottom: 2rem; max-width: 1100px; }
         </style>
         """,
         unsafe_allow_html=True,
