@@ -43,3 +43,27 @@ def weaviate_unavailable(message: str) -> ServiceError:
         "weaviate_unavailable",
         message,
     )
+
+
+def auth_not_configured() -> ServiceError:
+    return ServiceError(
+        status.HTTP_503_SERVICE_UNAVAILABLE,
+        "auth_not_configured",
+        "Authentication is not enabled or not fully configured on the server.",
+    )
+
+
+def email_already_registered() -> ServiceError:
+    return ServiceError(
+        status.HTTP_409_CONFLICT,
+        "email_taken",
+        "An account with this email already exists.",
+    )
+
+
+def invalid_credentials() -> ServiceError:
+    return ServiceError(
+        status.HTTP_401_UNAUTHORIZED,
+        "invalid_credentials",
+        "Incorrect email or password.",
+    )

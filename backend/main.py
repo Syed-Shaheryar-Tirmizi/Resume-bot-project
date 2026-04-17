@@ -26,7 +26,18 @@ async def lifespan(app: FastAPI):
         )
     logger.info("Initializing Weaviate (required vector store)…")
     await asyncio.to_thread(vector_store.init_weaviate)
-    logger.info("Weaviate ready; API startup complete.")
+    logger.info("Weaviate ready.")
+    if settings.enable_auth:
+        if not settings.database_url or not settings.jwt_secret_key:
+            raise RuntimeError(
+                "ENABLE_AUTH is true but DATABASE_URL or JWT_SECRET_KEY is missing. "
+                "Set both in .env for PostgreSQL-backed login."
+            )
+        from backend.db import init_db
+
+        await asyncio.to_thread(init_db)
+        logger.info("PostgreSQL auth tables ready.")
+    logger.info("API startup complete.")
     yield
     logger.info("Shutting down Weaviate client…")
     await asyncio.to_thread(vector_store.shutdown_weaviate)
@@ -50,6 +61,10 @@ app.include_router(match.router, prefix="/api")
 if settings.enable_voice_input:
     app.include_router(voice.router, prefix="/api")
 app.include_router(documents.router, prefix="/api")
+if settings.enable_auth:
+    from backend.routers import auth
+
+    app.include_router(auth.router, prefix="/api")
 
 
 @app.get("/health")

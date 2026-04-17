@@ -27,9 +27,23 @@ class Settings(BaseSettings):
 
     google_application_credentials: str | None = None
 
-    @field_validator("openai_api_key", "weaviate_url", "weaviate_api_key", mode="before")
+    # Auth (PostgreSQL + JWT). When enable_auth is true, DATABASE_URL and JWT_SECRET_KEY are required.
+    enable_auth: bool = False
+    database_url: str = ""
+    jwt_secret_key: str = ""
+    jwt_algorithm: str = "HS256"
+    jwt_access_token_expire_minutes: int = 60 * 24 * 7  # 7 days
+
+    @field_validator("openai_api_key", "weaviate_url", "weaviate_api_key", "database_url", mode="before")
     @classmethod
     def strip_str(cls, v: object) -> object:
+        if isinstance(v, str):
+            return v.strip()
+        return v
+
+    @field_validator("jwt_secret_key", mode="before")
+    @classmethod
+    def strip_jwt_secret(cls, v: object) -> object:
         if isinstance(v, str):
             return v.strip()
         return v

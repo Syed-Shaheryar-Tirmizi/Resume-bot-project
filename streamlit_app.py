@@ -42,6 +42,26 @@ def post_json(path: str, payload: dict) -> dict:
         return r.json()
 
 
+def post_auth_login(email: str, password: str) -> dict:
+    with httpx.Client(timeout=30.0) as client:
+        r = client.post(
+            f"{api_base()}/api/auth/login",
+            json={"email": email, "password": password},
+        )
+        r.raise_for_status()
+        return r.json()
+
+
+def post_auth_register(email: str, password: str) -> dict:
+    with httpx.Client(timeout=30.0) as client:
+        r = client.post(
+            f"{api_base()}/api/auth/register",
+            json={"email": email, "password": password},
+        )
+        r.raise_for_status()
+        return r.json()
+
+
 def post_file(path: str, field: str, file_bytes: bytes, filename: str) -> dict:
     with httpx.Client(timeout=120.0) as client:
         r = client.post(
@@ -351,7 +371,67 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 _inject_app_theme_css()
-st.title("Resume Insight AI")
+
+if "auth_token" not in st.session_state:
+    st.session_state.auth_token = None
+if "user_email" not in st.session_state:
+    st.session_state.user_email = None
+
+if settings.enable_auth and not st.session_state.auth_token:
+    st.title("Resume Insight AI")
+    st.caption("Sign in or register to continue. The API must run with PostgreSQL auth enabled.")
+    tab_login, tab_reg = st.tabs(["Log in", "Register"])
+    with tab_login:
+        le = st.text_input("Email", key="wall_login_email", autocomplete="email")
+        lp = st.text_input("Password", type="password", key="wall_login_password")
+        if st.button("Log in", key="wall_btn_login", type="primary"):
+            if not (le or "").strip() or not lp:
+                st.warning("Enter email and password.")
+            else:
+                try:
+                    data = post_auth_login((le or "").strip(), lp)
+                    st.session_state.auth_token = data.get("access_token")
+                    st.session_state.user_email = data.get("email")
+                    st.rerun()
+                except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                    st.error(format_api_error(e))
+                except Exception as e:
+                    st.error(format_api_error(e))
+    with tab_reg:
+        re = st.text_input("Email", key="wall_reg_email", autocomplete="email")
+        rp = st.text_input("Password", type="password", key="wall_reg_password")
+        rp2 = st.text_input("Confirm password", type="password", key="wall_reg_password2")
+        st.caption("Password must be at least 8 characters.")
+        if st.button("Create account", key="wall_btn_register", type="primary"):
+            e = (re or "").strip()
+            if not e or not rp:
+                st.warning("Enter email and password.")
+            elif rp != rp2:
+                st.warning("Passwords do not match.")
+            elif len(rp) < 8:
+                st.warning("Password must be at least 8 characters.")
+            else:
+                try:
+                    data = post_auth_register(e, rp)
+                    st.session_state.auth_token = data.get("access_token")
+                    st.session_state.user_email = data.get("email")
+                    st.rerun()
+                except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                    st.error(format_api_error(e))
+                except Exception as e:
+                    st.error(format_api_error(e))
+    st.stop()
+
+title_row_l, title_row_r = st.columns([4, 1])
+with title_row_l:
+    st.title("Resume Insight AI")
+with title_row_r:
+    if settings.enable_auth and st.session_state.auth_token:
+        if st.button("Log out", key="btn_logout"):
+            st.session_state.auth_token = None
+            st.session_state.user_email = None
+            st.rerun()
+
 st.caption(
     "AI resume creation and semantic matching (Weaviate required)."
     + (
@@ -360,6 +440,8 @@ st.caption(
         else ""
     )
 )
+if settings.enable_auth and st.session_state.user_email:
+    st.caption(f"Signed in as {st.session_state.user_email}.")
 
 if "chat_messages" not in st.session_state:
     st.session_state.chat_messages = []
