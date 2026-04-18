@@ -316,8 +316,15 @@ def _inject_app_theme_css() -> None:
                 border-radius: 9px;
                 font-size: 13px;
                 font-weight: 500;
+                white-space: nowrap;
+                padding: 0.45rem 0.9rem;
+                min-height: 2.25rem;
             }
             .stButton > button:hover { background: #EEF3F9; }
+            /* Avoid clipping buttons in horizontal layouts (e.g. title + Log out) */
+            [data-testid="stHorizontalBlock"] > [data-testid="column"] {
+                overflow: visible !important;
+            }
             .stDownloadButton > button {
                 background: #F0FDF4 !important;
                 border: 1.5px solid #BBF7D0 !important;
@@ -358,7 +365,8 @@ def _inject_app_theme_css() -> None:
             }
 
             hr { border-color: #DBEAFE; border-width: 1px; }
-            .block-container { padding-top: 1.5rem; padding-bottom: 2rem; max-width: 1100px; }
+            /* Extra top space so the first row (title / actions) is not clipped by the fixed Streamlit header */
+            .block-container { padding-top: 2.75rem; padding-bottom: 2rem; max-width: 1100px; }
         </style>
         """,
         unsafe_allow_html=True,
@@ -422,12 +430,12 @@ if settings.enable_auth and not st.session_state.auth_token:
                     st.error(format_api_error(e))
     st.stop()
 
-title_row_l, title_row_r = st.columns([4, 1])
-with title_row_l:
-    st.title("Resume Insight AI")
-with title_row_r:
-    if settings.enable_auth and st.session_state.auth_token:
-        if st.button("Log out", key="btn_logout"):
+st.title("Resume Insight AI")
+# Log out on its own row below the title so it stays below the fixed app header (same row was clipped at the top).
+if settings.enable_auth and st.session_state.auth_token:
+    _spacer, _logout_col = st.columns([6, 2])
+    with _logout_col:
+        if st.button("Log out", key="btn_logout", use_container_width=True):
             st.session_state.auth_token = None
             st.session_state.user_email = None
             st.rerun()
