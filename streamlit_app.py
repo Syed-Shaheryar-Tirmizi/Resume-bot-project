@@ -395,6 +395,18 @@ if "auth_token" not in st.session_state:
     st.session_state.auth_token = None
 if "user_email" not in st.session_state:
     st.session_state.user_email = None
+if "resume_uploader_nonce" not in st.session_state:
+    st.session_state.resume_uploader_nonce = 0
+if "jd_uploader_nonce" not in st.session_state:
+    st.session_state.jd_uploader_nonce = 0
+
+
+def _clear_match_results_state() -> None:
+    if "last_match_result" in st.session_state:
+        del st.session_state["last_match_result"]
+    for k in list(st.session_state.keys()):
+        if isinstance(k, str) and k.startswith("match_docx_"):
+            del st.session_state[k]
 
 if settings.enable_auth and not st.session_state.auth_token:
     st.title("Resume Insight AI")
@@ -449,6 +461,7 @@ if settings.enable_auth and st.session_state.auth_token:
         if st.button("Log out", key="btn_logout", use_container_width=True):
             st.session_state.auth_token = None
             st.session_state.user_email = None
+            _clear_match_results_state()
             st.rerun()
 
 st.caption(
@@ -575,7 +588,7 @@ with tab_match:
         up_resume = st.file_uploader(
             "Upload one or more resumes (PDF, DOCX, or TXT) — indexed directly on the server (no separate extract step)",
             type=["pdf", "docx", "txt"],
-            key="up_resume",
+            key=f"up_resume_{st.session_state.resume_uploader_nonce}",
             accept_multiple_files=True,
         )
         title = st.text_input(
@@ -603,34 +616,50 @@ with tab_match:
                     ok = 0
                     store = None
                     errs = []
+                    indexed_files: list[str] = []
+                    progress = st.progress(0, text=f"Indexing {n_files} file(s)...")
                     for i, uf in enumerate(up_resume, start=1):
+                        display_name = uf.name or f"file-{i}"
                         t = index_title_for_resume_upload(uf.name or "", i, title, n_files)
                         if t is None:
                             st.warning(
                                 "Please enter a title or name for this resume. It is used to label your resume in match results."
                             )
+                            progress.empty()
                             break
                         try:
-                            res = post_match_index_file(
-                                t,
-                                uf.getvalue(),
-                                uf.name or "resume.pdf",
-                            )
+                            with st.spinner(f"Indexing {uf.name or 'resume file'}..."):
+                                res = post_match_index_file(
+                                    t,
+                                    uf.getvalue(),
+                                    uf.name or "resume.pdf",
+                                )
                             ok += 1
+                            indexed_files.append(display_name)
                             store = res.get("store")
                         except (httpx.HTTPStatusError, httpx.RequestError) as e:
-                            errs.append(f"{uf.name or 'file'}: {format_api_error(e)}")
+                            errs.append(f"{display_name}: {format_api_error(e)}")
                         except Exception as e:
-                            errs.append(f"{uf.name or 'file'}: {format_api_error(e)}")
+                            errs.append(f"{display_name}: {format_api_error(e)}")
+                        progress.progress(int((i / n_files) * 100), text=f"Processed {i}/{n_files} file(s)")
+                    progress.empty()
                     if ok and not errs:
                         st.success(
                             f"Indexed {ok} resume(s) successfully"
                             + (f" (store: {store})." if store else ".")
                         )
+                        if indexed_files:
+                            st.caption("Indexed files: " + ", ".join(indexed_files))
+                        st.session_state.resume_uploader_nonce += 1
+                        st.rerun()
                     elif ok and errs:
                         st.success(f"Indexed {ok} resume(s) (store: {store}). Some files failed:")
+                        if indexed_files:
+                            st.caption("Indexed files: " + ", ".join(indexed_files))
                         for err in errs:
                             st.error(err)
+                        st.session_state.resume_uploader_nonce += 1
+                        st.rerun()
                     elif errs:
                         for err in errs:
                             st.error(err)
@@ -648,10 +677,11 @@ with tab_match:
                 st.warning("Resume content should be at least 20 characters.")
             else:
                 try:
-                    res = post_json(
-                        "/api/match/index",
-                        {"title": title.strip(), "content": body.strip()},
-                    )
+                    with st.spinner("Indexing resume text..."):
+                        res = post_json(
+                            "/api/match/index",
+                            {"title": title.strip(), "content": body.strip()},
+                        )
                     st.success(f"Resume indexed successfully (store: {res.get('store')}).")
                 except (httpx.HTTPStatusError, httpx.RequestError) as e:
                     st.error(format_api_error(e))
@@ -662,21 +692,22 @@ with tab_match:
         up_jd = st.file_uploader(
             "Upload job description (PDF, DOCX, or TXT) — matched directly on the server (no separate extract step)",
             type=["pdf", "docx", "txt"],
-            key="up_jd",
+            key=f"up_jd_{st.session_state.jd_uploader_nonce}",
         )
         if up_jd is not None:
             if st.button("Run semantic match from uploaded file", key="btn_match_jd_file"):
                 try:
                     tk = int(st.session_state.get("match_top_k", 5))
-                    res = post_match_query_file(
-                        up_jd.getvalue(),
-                        up_jd.name or "job.txt",
-                        tk,
-                    )
-                    for k in list(st.session_state.keys()):
-                        if isinstance(k, str) and k.startswith("match_docx_"):
-                            del st.session_state[k]
+                    with st.spinner("Running semantic search..."):
+                        res = post_match_query_file(
+                            up_jd.getvalue(),
+                            up_jd.name or "job.txt",
+                            tk,
+                        )
+                    _clear_match_results_state()
                     st.session_state["last_match_result"] = res
+                    st.session_state.jd_uploader_nonce += 1
+                    st.rerun()
                 except (httpx.HTTPStatusError, httpx.RequestError) as e:
                     st.error(format_api_error(e))
                 except Exception as e:
@@ -692,13 +723,12 @@ with tab_match:
                 st.warning("Job description should be at least 20 characters.")
             else:
                 try:
-                    res = post_json(
-                        "/api/match/query",
-                        {"job_description": jd.strip(), "top_k": int(top_k)},
-                    )
-                    for k in list(st.session_state.keys()):
-                        if isinstance(k, str) and k.startswith("match_docx_"):
-                            del st.session_state[k]
+                    with st.spinner("Running semantic search..."):
+                        res = post_json(
+                            "/api/match/query",
+                            {"job_description": jd.strip(), "top_k": int(top_k)},
+                        )
+                    _clear_match_results_state()
                     st.session_state["last_match_result"] = res
                 except (httpx.HTTPStatusError, httpx.RequestError) as e:
                     st.error(format_api_error(e))
@@ -713,10 +743,7 @@ with tab_match:
             st.markdown("**Match results**")
         with mr2:
             if st.button("Clear results", key="btn_clear_match_results"):
-                del st.session_state["last_match_result"]
-                for k in list(st.session_state.keys()):
-                    if isinstance(k, str) and k.startswith("match_docx_"):
-                        del st.session_state[k]
+                _clear_match_results_state()
                 st.rerun()
         st.caption(
             f"Vector store: {match_res.get('store')} — text in each result may be truncated by the server (up to ~8k characters)."
@@ -778,9 +805,43 @@ with tab_stored:
             )
             if st.button("Delete all stored resumes", disabled=not confirm_all, key="btn_delete_all_stored"):
                 try:
-                    cleared = delete_json("/api/match/resumes")
-                    n = int(cleared.get("deleted", 0))
-                    st.success(f"Removed {n} resume(s) from the store ({cleared.get('store', '')}).")
+                    listing_for_delete = get_json("/api/match/resumes")
+                    rows_for_delete = listing_for_delete.get("resumes") or []
+                    if not rows_for_delete:
+                        st.info("No stored resumes to delete.")
+                    else:
+                        total = len(rows_for_delete)
+                        progress = st.progress(0, text=f"Deleting 0/{total} resumes...")
+                        deleted = 0
+                        failed: list[str] = []
+                        with st.spinner("Deleting stored resumes..."):
+                            for i, item in enumerate(rows_for_delete, start=1):
+                                rid = item.get("resume_id") or ""
+                                title = (item.get("title") or "").strip() or rid or f"resume-{i}"
+                                if not rid:
+                                    failed.append(f"{title}: missing resume_id")
+                                    progress.progress(int((i / total) * 100), text=f"Deleting {i}/{total} resumes...")
+                                    continue
+                                try:
+                                    delete_json(f"/api/match/{rid}")
+                                    deleted += 1
+                                except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                                    failed.append(f"{title}: {format_api_error(e)}")
+                                except Exception as e:
+                                    failed.append(f"{title}: {format_api_error(e)}")
+                                progress.progress(
+                                    int((i / total) * 100),
+                                    text=f"Deleting {i}/{total} resumes...",
+                                )
+                        progress.empty()
+                        st.success(
+                            f"Deletion finished: {deleted}/{total} resume(s) removed"
+                            + (f" (store: {listing_for_delete.get('store', '')})." if listing_for_delete.get("store") else ".")
+                        )
+                        if failed:
+                            st.warning(f"{len(failed)} resume(s) could not be deleted.")
+                            for err in failed:
+                                st.error(err)
                 except (httpx.HTTPStatusError, httpx.RequestError) as e:
                     st.error(format_api_error(e))
                 except Exception as e:
