@@ -18,6 +18,7 @@ from backend.errors import ServiceError, weaviate_unavailable
 logger = logging.getLogger(__name__)
 
 COLLECTION = "ResumeInsightResume"
+USER_ID_PROP = "user_id"
 
 _client: weaviate.WeaviateClient | None = None
 _lock = threading.Lock()
@@ -76,12 +77,22 @@ def _connect() -> weaviate.WeaviateClient:
 
 def _ensure_collection(client: weaviate.WeaviateClient) -> None:
     if client.collections.exists(COLLECTION):
+        coll = client.collections.get(COLLECTION)
+        try:
+            cfg = coll.config.get()
+            prop_names = {p.name for p in (cfg.properties or [])}
+            if USER_ID_PROP not in prop_names:
+                coll.config.add_property(Property(name=USER_ID_PROP, data_type=DataType.TEXT))
+        except Exception as e:
+            logger.exception("Failed to ensure collection property %s", USER_ID_PROP)
+            raise weaviate_unavailable(f"Failed to update Weaviate schema: {e}") from e
         return
     logger.info("Creating Weaviate collection %s", COLLECTION)
     client.collections.create(
         name=COLLECTION,
         properties=[
             Property(name="resume_id", data_type=DataType.TEXT),
+            Property(name=USER_ID_PROP, data_type=DataType.TEXT),
             Property(name="title", data_type=DataType.TEXT),
             Property(name="content", data_type=DataType.TEXT),
         ],
@@ -153,7 +164,7 @@ def _resume_uuid(resume_id: str) -> py_uuid.UUID:
     return py_uuid.UUID(wutil.generate_uuid5(resume_id, COLLECTION))
 
 
-def index_resume(resume_id: str, title: str, content: str) -> str:
+def index_resume(resume_id: str, title: str, content: str, *, user_email: str) -> str:
     from backend.services.embeddings import embed_texts
 
     client = _require_client()
@@ -168,7 +179,12 @@ def index_resume(resume_id: str, title: str, content: str) -> str:
     try:
         coll.data.insert(
             uuid=uid,
-            properties={"resume_id": resume_id, "title": title, "content": content},
+            properties={
+                "resume_id": resume_id,
+                USER_ID_PROP: user_email.lower(),
+                "title": title,
+                "content": content,
+            },
             vector=vector,
         )
     except Exception as e:
@@ -177,10 +193,16 @@ def index_resume(resume_id: str, title: str, content: str) -> str:
     return resume_id
 
 
-def remove_resume(resume_id: str) -> None:
+def remove_resume(resume_id: str, *, user_email: str) -> None:
     client = _require_client()
     coll = client.collections.get(COLLECTION)
     try:
+        obj = coll.query.fetch_object_by_id(_resume_uuid(resume_id))
+        if not obj:
+            return
+        props = obj.properties or {}
+        if str(props.get(USER_ID_PROP, "")).lower() != user_email.lower():
+            return
         coll.data.delete_by_id(_resume_uuid(resume_id))
     except Exception:
         pass
@@ -189,7 +211,7 @@ def remove_resume(resume_id: str) -> None:
 _EXCERPT_LEN = 400
 
 
-def list_stored_resumes() -> list[StoredResumeInfo]:
+def list_stored_resumes(*, user_email: str) -> list[StoredResumeInfo]:
     """Return all indexed resumes (title + excerpt; full text stays in Weaviate)."""
     client = _require_client()
     coll = client.collections.get(COLLECTION)
@@ -202,6 +224,9 @@ def list_stored_resumes() -> list[StoredResumeInfo]:
             content = str(props.get("content", ""))
             if not rid:
                 continue
+            owner = str(props.get(USER_ID_PROP, "")).lower()
+            if owner != user_email.lower():
+                continue
             excerpt = content[:_EXCERPT_LEN] + ("…" if len(content) > _EXCERPT_LEN else "")
             out.append(StoredResumeInfo(resume_id=rid, title=title, content_excerpt=excerpt))
     except Exception as e:
@@ -211,12 +236,16 @@ def list_stored_resumes() -> list[StoredResumeInfo]:
     return out
 
 
-def clear_all_resumes() -> int:
+def clear_all_resumes(*, user_email: str) -> int:
     """Delete every object in the resume collection. Returns number of objects removed."""
     client = _require_client()
     coll = client.collections.get(COLLECTION)
     try:
-        ids = [obj.uuid for obj in coll.iterator(include_vector=False)]
+        ids = []
+        for obj in coll.iterator(include_vector=False):
+            props = obj.properties or {}
+            if str(props.get(USER_ID_PROP, "")).lower() == user_email.lower():
+                ids.append(obj.uuid)
     except Exception as e:
         logger.exception("Weaviate clear all resumes failed (listing)")
         raise weaviate_unavailable(f"Failed to delete all resumes: {e}") from e
@@ -230,7 +259,7 @@ def clear_all_resumes() -> int:
     return deleted
 
 
-def match_job(job_text: str, top_k: int = 5) -> list[MatchResult]:
+def match_job(job_text: str, *, user_email: str, top_k: int = 5) -> list[MatchResult]:
     from backend.services.embeddings import embed_texts
 
     client = _require_client()
@@ -241,6 +270,7 @@ def match_job(job_text: str, top_k: int = 5) -> list[MatchResult]:
         res = coll.query.near_vector(
             near_vector=qv,
             limit=top_k,
+            filters=wvc.query.Filter.by_property(USER_ID_PROP).equal(user_email.lower()),
             return_metadata=MetadataQuery(distance=True),
         )
     except Exception as e:

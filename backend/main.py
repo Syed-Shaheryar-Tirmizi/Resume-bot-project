@@ -20,27 +20,40 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     import asyncio
 
-    if not settings.openai_api_key:
-        raise RuntimeError(
-            "OPENAI_API_KEY is required. Set it in .env or the environment before starting the server."
-        )
-    logger.info("Initializing Weaviate (required vector store)…")
-    await asyncio.to_thread(vector_store.init_weaviate)
-    logger.info("Weaviate ready.")
-    if settings.enable_auth:
-        if not settings.database_url or not settings.jwt_secret_key:
+    weaviate_started = False
+    try:
+        if not settings.openai_api_key:
             raise RuntimeError(
-                "ENABLE_AUTH is true but DATABASE_URL or JWT_SECRET_KEY is missing. "
-                "Set both in .env for PostgreSQL-backed login."
+                "OPENAI_API_KEY is required. Set it in .env or the environment before starting the server."
             )
-        from backend.db import init_db
+        logger.info("Initializing Weaviate (required vector store)…")
+        await asyncio.to_thread(vector_store.init_weaviate)
+        weaviate_started = True
+        logger.info("Weaviate ready.")
+        if settings.enable_auth:
+            if not settings.database_url or not settings.jwt_secret_key:
+                raise RuntimeError(
+                    "ENABLE_AUTH is true but DATABASE_URL or JWT_SECRET_KEY is missing. "
+                    "Set both in .env for PostgreSQL-backed login."
+                )
+            from backend.db import init_db
 
-        await asyncio.to_thread(init_db)
-        logger.info("PostgreSQL auth tables ready.")
-    logger.info("API startup complete.")
-    yield
-    logger.info("Shutting down Weaviate client…")
-    await asyncio.to_thread(vector_store.shutdown_weaviate)
+            try:
+                await asyncio.to_thread(init_db)
+            except Exception as e:
+                raise RuntimeError(
+                    "Database connection failed while auth is enabled. "
+                    "Start PostgreSQL and verify DATABASE_URL, "
+                    "or set ENABLE_AUTH=false if you want to run without login. "
+                    f"Original error: {e}"
+                ) from e
+            logger.info("PostgreSQL auth tables ready.")
+        logger.info("API startup complete.")
+        yield
+    finally:
+        if weaviate_started:
+            logger.info("Shutting down Weaviate client…")
+            await asyncio.to_thread(vector_store.shutdown_weaviate)
 
 
 app = FastAPI(title="Resume Insight AI", version="0.1.0", lifespan=lifespan)

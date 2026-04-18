@@ -16,6 +16,13 @@ def api_base() -> str:
     return DEFAULT_API.rstrip("/")
 
 
+def auth_headers() -> dict[str, str]:
+    token = st.session_state.get("auth_token")
+    if token:
+        return {"Authorization": f"Bearer {token}"}
+    return {}
+
+
 @st.cache_data(ttl=15, show_spinner=False)
 def fetch_ready_status(api_root: str) -> tuple[bool, list[str]]:
     root = (api_root or DEFAULT_API).rstrip("/")
@@ -37,7 +44,7 @@ def fetch_ready_status(api_root: str) -> tuple[bool, list[str]]:
 
 def post_json(path: str, payload: dict) -> dict:
     with httpx.Client(timeout=120.0) as client:
-        r = client.post(f"{api_base()}{path}", json=payload)
+        r = client.post(f"{api_base()}{path}", json=payload, headers=auth_headers())
         r.raise_for_status()
         return r.json()
 
@@ -67,6 +74,7 @@ def post_file(path: str, field: str, file_bytes: bytes, filename: str) -> dict:
         r = client.post(
             f"{api_base()}{path}",
             files={field: (filename, file_bytes)},
+            headers=auth_headers(),
         )
         r.raise_for_status()
         return r.json()
@@ -78,6 +86,7 @@ def post_match_index_file(title: str, file_bytes: bytes, filename: str) -> dict:
             f"{api_base()}/api/match/index-file",
             data={"title": title.strip()},
             files={"file": (filename or "resume.pdf", file_bytes)},
+            headers=auth_headers(),
         )
         r.raise_for_status()
         return r.json()
@@ -89,6 +98,7 @@ def post_match_query_file(file_bytes: bytes, filename: str, top_k: int) -> dict:
             f"{api_base()}/api/match/query-file",
             data={"top_k": str(int(top_k))},
             files={"file": (filename or "job.txt", file_bytes)},
+            headers=auth_headers(),
         )
         r.raise_for_status()
         return r.json()
@@ -96,14 +106,14 @@ def post_match_query_file(file_bytes: bytes, filename: str, top_k: int) -> dict:
 
 def get_json(path: str) -> dict:
     with httpx.Client(timeout=60.0) as client:
-        r = client.get(f"{api_base()}{path}")
+        r = client.get(f"{api_base()}{path}", headers=auth_headers())
         r.raise_for_status()
         return r.json()
 
 
 def delete_json(path: str) -> dict:
     with httpx.Client(timeout=120.0) as client:
-        r = client.delete(f"{api_base()}{path}")
+        r = client.delete(f"{api_base()}{path}", headers=auth_headers())
         r.raise_for_status()
         if r.content:
             return r.json()
@@ -115,6 +125,7 @@ def post_export_docx(content: str) -> bytes:
         r = client.post(
             f"{api_base()}/api/documents/export-resume-docx",
             json={"content": content},
+            headers=auth_headers(),
         )
         r.raise_for_status()
         return r.content

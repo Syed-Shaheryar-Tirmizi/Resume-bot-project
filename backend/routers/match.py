@@ -1,10 +1,11 @@
 import uuid
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field, field_validator
 
 from backend.services import documents as doc_svc
 from backend.services import vector_store
+from backend.routers.deps import require_current_user_email
 
 router = APIRouter(prefix="/match", tags=["match"])
 
@@ -58,8 +59,8 @@ class ListResumesResponse(BaseModel):
 _STORE = "weaviate"
 
 
-def _build_match_response(job_description: str, top_k: int) -> MatchResponse:
-    results = vector_store.match_job(job_description.strip(), top_k=top_k)
+def _build_match_response(job_description: str, top_k: int, user_email: str) -> MatchResponse:
+    results = vector_store.match_job(job_description.strip(), user_email=user_email, top_k=top_k)
     return MatchResponse(
         results=[
             MatchItem(
@@ -75,9 +76,12 @@ def _build_match_response(job_description: str, top_k: int) -> MatchResponse:
 
 
 @router.post("/index", response_model=IndexResponse)
-def index_resume(req: IndexRequest) -> IndexResponse:
+def index_resume(
+    req: IndexRequest,
+    user_email: str = Depends(require_current_user_email),
+) -> IndexResponse:
     rid = str(uuid.uuid4())
-    rid = vector_store.index_resume(rid, req.title.strip(), req.content.strip())
+    rid = vector_store.index_resume(rid, req.title.strip(), req.content.strip(), user_email=user_email)
     return IndexResponse(resume_id=rid, store=_STORE)
 
 
@@ -85,6 +89,7 @@ def index_resume(req: IndexRequest) -> IndexResponse:
 async def index_resume_file(
     title: str = Form(..., min_length=1, max_length=256),
     file: UploadFile = File(...),
+    user_email: str = Depends(require_current_user_email),
 ) -> IndexResponse:
     """Upload a resume file (PDF/DOCX/TXT); text is extracted on the server and indexed in one step."""
     data = await file.read()
@@ -104,13 +109,13 @@ async def index_resume_file(
             detail="extracted text must be at least 20 characters",
         )
     rid = str(uuid.uuid4())
-    rid = vector_store.index_resume(rid, title_clean, content)
+    rid = vector_store.index_resume(rid, title_clean, content, user_email=user_email)
     return IndexResponse(resume_id=rid, store=_STORE)
 
 
 @router.get("/resumes", response_model=ListResumesResponse)
-def list_resumes() -> ListResumesResponse:
-    rows = vector_store.list_stored_resumes()
+def list_resumes(user_email: str = Depends(require_current_user_email)) -> ListResumesResponse:
+    rows = vector_store.list_stored_resumes(user_email=user_email)
     return ListResumesResponse(
         resumes=[
             StoredResumeItem(
@@ -125,20 +130,24 @@ def list_resumes() -> ListResumesResponse:
 
 
 @router.delete("/resumes")
-def delete_all_resumes() -> dict:
-    n = vector_store.clear_all_resumes()
+def delete_all_resumes(user_email: str = Depends(require_current_user_email)) -> dict:
+    n = vector_store.clear_all_resumes(user_email=user_email)
     return {"ok": True, "deleted": n, "store": _STORE}
 
 
 @router.post("/query", response_model=MatchResponse)
-def match_job(req: MatchRequest) -> MatchResponse:
-    return _build_match_response(req.job_description, req.top_k)
+def match_job(
+    req: MatchRequest,
+    user_email: str = Depends(require_current_user_email),
+) -> MatchResponse:
+    return _build_match_response(req.job_description, req.top_k, user_email)
 
 
 @router.post("/query-file", response_model=MatchResponse)
 async def match_job_file(
     top_k: int = Form(5, ge=1, le=50),
     file: UploadFile = File(...),
+    user_email: str = Depends(require_current_user_email),
 ) -> MatchResponse:
     """Upload a job description file (PDF/DOCX/TXT); text is extracted on the server and used for semantic match."""
     data = await file.read()
@@ -154,10 +163,13 @@ async def match_job_file(
             status_code=422,
             detail="extracted job description must be at least 20 characters",
         )
-    return _build_match_response(jd, top_k)
+    return _build_match_response(jd, top_k, user_email)
 
 
 @router.delete("/{resume_id}")
-def delete_resume(resume_id: str) -> dict:
-    vector_store.remove_resume(resume_id)
+def delete_resume(
+    resume_id: str,
+    user_email: str = Depends(require_current_user_email),
+) -> dict:
+    vector_store.remove_resume(resume_id, user_email=user_email)
     return {"ok": True, "resume_id": resume_id}
