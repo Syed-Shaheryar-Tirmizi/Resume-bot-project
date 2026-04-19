@@ -376,8 +376,53 @@ def _inject_app_theme_css() -> None:
             }
 
             hr { border-color: #DBEAFE; border-width: 1px; }
-            /* Extra top space so the first row (title / actions) is not clipped by the fixed Streamlit header */
-            .block-container { padding-top: 2.75rem; padding-bottom: 2rem; max-width: 1100px; }
+
+            /* ══════════════════════════════
+               SIDE PANELS — fixed-position full-height image strips
+            ══════════════════════════════ */
+             .left-panel-images,
+             .right-panel-images {
+                 position: fixed;
+                 top: 60px;
+                 bottom: 0;
+                 width: 15vw;
+                 display: flex;
+                 flex-direction: column;
+                 gap: 2rem;       /* Increased gap */
+                 padding: 1.5rem;
+                 z-index: 10;
+                 background: transparent;
+             }
+             .left-panel-images  { 
+                 left: 0; 
+                 justify-content: flex-start; /* Place at top */
+             }
+             .right-panel-images { 
+                 right: 0; 
+                 justify-content: flex-end;   /* Place at bottom */
+             }
+ 
+             .side-panel-img {
+                 flex: 0 0 35vh;  /* Smaller fixed height */
+                 width: 100%;
+                 min-height: 0;
+                 background-size: 100% 100%; /* Fully fit in box without crop */
+                 background-position: center center;
+                 background-repeat: no-repeat;
+                 border-radius: 16px;
+                 box-shadow: 0 8px 24px rgba(30,58,95,0.12);
+                 display: block;
+                 background-color: #f8fafc; /* Subtle background if cover leaves edges */
+             }
+
+            /* Push Streamlit content away from both fixed panels */
+            .block-container {
+                padding-top: 2.75rem;
+                padding-bottom: 2rem;
+                padding-left: calc(15vw + 0.75rem) !important;
+                padding-right: calc(15vw + 0.75rem) !important;
+                max-width: 100%;
+            }
         </style>
         """,
         unsafe_allow_html=True,
@@ -453,444 +498,489 @@ if settings.enable_auth and not st.session_state.auth_token:
                     st.error(format_api_error(e))
     st.stop()
 
-st.title("Resume Insight AI")
-# Log out on its own row below the title so it stays below the fixed app header (same row was clipped at the top).
-if settings.enable_auth and st.session_state.auth_token:
-    _spacer, _logout_col = st.columns([6, 2])
-    with _logout_col:
-        if st.button("Log out", key="btn_logout", use_container_width=True):
-            st.session_state.auth_token = None
-            st.session_state.user_email = None
-            _clear_match_results_state()
-            st.rerun()
+_APP_ROOT = Path(__file__).resolve().parent
+_LEFT_IMAGE_1 = _APP_ROOT / "Resume creation left 1.jpeg"
+_LEFT_IMAGE_2 = _APP_ROOT / "Resume creation left 2.jpeg"
+# Right side images added by user (noting one is .jpeg and one is .png, all lowercase)
+_RIGHT_IMAGE_1 = _APP_ROOT / "resume creation right 1.jpeg"
+_RIGHT_IMAGE_2 = _APP_ROOT / "resume creation right 2.jpeg"
 
-st.caption(
-    "AI resume creation and semantic matching (Weaviate required)."
-    + (
-        " Domain transform and voice input are disabled in this build."
-        if not (settings.enable_cv_domain_transform or settings.enable_voice_input)
-        else ""
-    )
-)
-if settings.enable_auth and st.session_state.user_email:
-    st.caption(f"Signed in as {st.session_state.user_email}.")
 
-if "chat_messages" not in st.session_state:
-    st.session_state.chat_messages = []
-if "export_docx" not in st.session_state:
-    st.session_state.export_docx = None
+def _render_side_panels() -> None:
+    """Inject full-height side panels as position:fixed HTML overlays.
+    Left panel uses left images, Right panel uses right images.
+    """
+    import base64
 
-ready_ok, ready_msgs = fetch_ready_status(api_base())
-if not ready_ok:
-    for msg in ready_msgs:
-        st.error(msg)
-else:
-    st.caption("API status: ready (OpenAI key set, Weaviate connected).")
+    def get_pane_html(images: list[Path]) -> str:
+        panel_html = []
+        for _path in images:
+            if _path.is_file():
+                data = base64.b64encode(_path.read_bytes()).decode()
+                ext = _path.suffix.lower().lstrip(".")
+                mime = "image/jpeg" if ext in ("jpg", "jpeg") else f"image/{ext}"
+                bg_val = f"data:{mime};base64,{data}"
+                panel_html.append(f'<div class="side-panel-img" style="background-image: url({bg_val});"></div>')
+        return "".join(panel_html)
 
-_tab_labels = ["Resume chatbot"]
-if settings.enable_cv_domain_transform:
-    _tab_labels.append("Domain transform")
-_tab_labels.append("Semantic matching")
-_tab_labels.append("Stored resumes")
-if settings.enable_voice_input:
-    _tab_labels.append("Voice (Whisper)")
-_tab_widgets = st.tabs(_tab_labels)
-_i = 0
-tab_chat = _tab_widgets[_i]
-_i += 1
-tab_xform = None
-if settings.enable_cv_domain_transform:
-    tab_xform = _tab_widgets[_i]
-    _i += 1
-tab_match = _tab_widgets[_i]
-_i += 1
-tab_stored = _tab_widgets[_i]
-_i += 1
-tab_voice = None
-if settings.enable_voice_input:
-    tab_voice = _tab_widgets[_i]
+    left_html = get_pane_html([_LEFT_IMAGE_1])
+    right_html = get_pane_html([_RIGHT_IMAGE_2])
 
-with tab_chat:
-    st.subheader("Conversational resume creation")
-    for m in st.session_state.chat_messages:
-        with st.chat_message(m["role"]):
-            st.markdown(m["content"])
-    prompt = st.chat_input("Describe your background or ask to draft your resume")
-    if prompt:
-        st.session_state.export_docx = None
-        st.session_state.chat_messages.append({"role": "user", "content": prompt})
-        try:
-            payload = {"messages": st.session_state.chat_messages}
-            data = post_json("/api/chat", payload)
-            reply = data.get("reply", "")
-            st.session_state.chat_messages.append({"role": "assistant", "content": reply})
-        except (httpx.HTTPStatusError, httpx.RequestError) as e:
-            st.error(format_api_error(e))
-        except Exception as e:
-            st.error(format_api_error(e))
-        st.rerun()
-    if st.button("Clear conversation"):
-        st.session_state.chat_messages = []
-        st.session_state.export_docx = None
-        st.rerun()
-
-    st.divider()
-    st.markdown("**Download formatted resume** — builds a Word file from the **latest AI reply**.")
-    dc1, dc2 = st.columns(2)
-    with dc1:
-        if st.button("Build Word document (.docx)"):
-            t = last_assistant_text().strip()
-            if len(t) < 10:
-                st.warning("Ask the chatbot to draft your resume first.")
-            else:
-                try:
-                    st.session_state.export_docx = post_export_docx(t)
-                    st.success("Document ready — download below.")
-                except (httpx.HTTPStatusError, httpx.RequestError) as e:
-                    st.error(format_api_error(e))
-                except Exception as e:
-                    st.error(format_api_error(e))
-    with dc2:
-        if st.session_state.export_docx:
-            st.download_button(
-                label="Download resume.docx",
-                data=st.session_state.export_docx,
-                file_name="resume.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                key="download_resume_docx",
-            )
-
-if tab_xform is not None:
-    with tab_xform:
-        st.subheader("Cross-domain resume transformation")
-        resume_text = st.text_area("Paste resume text", height=220, placeholder="Full resume…")
-        target = st.text_input("Target domain", placeholder="e.g. Digital Marketing")
-        if st.button("Transform"):
-            if len(resume_text.strip()) < 20 or not target.strip():
-                st.warning("Provide resume text (20+ chars) and a target domain.")
-            else:
-                try:
-                    out = post_json(
-                        "/api/transform",
-                        {"resume_text": resume_text, "target_domain": target.strip()},
-                    )
-                    st.markdown(out.get("transformed_resume", ""))
-                except (httpx.HTTPStatusError, httpx.RequestError) as e:
-                    st.error(format_api_error(e))
-                except Exception as e:
-                    st.error(format_api_error(e))
-
-with tab_match:
-    st.subheader("Upload resume & job description, then match")
-    c1, c2 = st.columns(2)
-    with c1:
-        st.markdown("**Your resume**")
-        up_resume = st.file_uploader(
-            "Upload one or more resumes (PDF, DOCX, or TXT) — indexed directly on the server (no separate extract step)",
-            type=["pdf", "docx", "txt"],
-            key=f"up_resume_{st.session_state.resume_uploader_nonce}",
-            accept_multiple_files=True,
+    if left_html or right_html:
+        st.markdown(
+            f'<div class="left-panel-images">{left_html}</div>'
+            f'<div class="right-panel-images">{right_html}</div>',
+            unsafe_allow_html=True,
         )
-        title = st.text_input(
-            "Title / name (required for a single file; optional prefix when uploading several)",
-            key="idx_title",
-        )
-        if up_resume:
-            n_files = len(up_resume)
-            btn_label = (
-                "Index from uploaded file"
-                if n_files == 1
-                else f"Index all uploaded files ({n_files})"
-            )
-            if n_files > 1:
-                st.caption(
-                    "With multiple files, each resume is titled using its file name (without extension). "
-                    "If you enter text in the field above, it is added as a prefix for every file."
-                )
-            if st.button(btn_label, key="btn_index_resume_file"):
-                if n_files == 1 and not title.strip():
-                    st.warning(
-                        "Please enter a title or name for this resume. It is used to label your resume in match results."
-                    )
-                else:
-                    ok = 0
-                    store = None
-                    errs = []
-                    indexed_files: list[str] = []
-                    progress = st.progress(0, text=f"Indexing {n_files} file(s)...")
-                    for i, uf in enumerate(up_resume, start=1):
-                        display_name = uf.name or f"file-{i}"
-                        t = index_title_for_resume_upload(uf.name or "", i, title, n_files)
-                        if t is None:
-                            st.warning(
-                                "Please enter a title or name for this resume. It is used to label your resume in match results."
-                            )
-                            progress.empty()
-                            break
-                        try:
-                            with st.spinner(f"Indexing {uf.name or 'resume file'}..."):
-                                res = post_match_index_file(
-                                    t,
-                                    uf.getvalue(),
-                                    uf.name or "resume.pdf",
-                                )
-                            ok += 1
-                            indexed_files.append(display_name)
-                            store = res.get("store")
-                        except (httpx.HTTPStatusError, httpx.RequestError) as e:
-                            errs.append(f"{display_name}: {format_api_error(e)}")
-                        except Exception as e:
-                            errs.append(f"{display_name}: {format_api_error(e)}")
-                        progress.progress(int((i / n_files) * 100), text=f"Processed {i}/{n_files} file(s)")
-                    progress.empty()
-                    if ok and not errs:
-                        st.success(
-                            f"Indexed {ok} resume(s) successfully"
-                            + (f" (store: {store})." if store else ".")
-                        )
-                        if indexed_files:
-                            st.caption("Indexed files: " + ", ".join(indexed_files))
-                        st.session_state.resume_uploader_nonce += 1
-                        st.rerun()
-                    elif ok and errs:
-                        st.success(f"Indexed {ok} resume(s) (store: {store}). Some files failed:")
-                        if indexed_files:
-                            st.caption("Indexed files: " + ", ".join(indexed_files))
-                        for err in errs:
-                            st.error(err)
-                        st.session_state.resume_uploader_nonce += 1
-                        st.rerun()
-                    elif errs:
-                        for err in errs:
-                            st.error(err)
-        body = st.text_area(
-            "Or paste resume text here and use “Index from text”",
-            height=180,
-            key="idx_body",
-        )
-        if st.button("Index from text"):
-            if not title.strip():
-                st.warning(
-                    "Please enter a title or name for this resume. It is used to label your resume in match results."
-                )
-            elif len(body.strip()) < 20:
-                st.warning("Resume content should be at least 20 characters.")
-            else:
-                try:
-                    with st.spinner("Indexing resume text..."):
-                        res = post_json(
-                            "/api/match/index",
-                            {"title": title.strip(), "content": body.strip()},
-                        )
-                    st.success(f"Resume indexed successfully (store: {res.get('store')}).")
-                except (httpx.HTTPStatusError, httpx.RequestError) as e:
-                    st.error(format_api_error(e))
-                except Exception as e:
-                    st.error(format_api_error(e))
-    with c2:
-        st.markdown("**Job description**")
-        up_jd = st.file_uploader(
-            "Upload job description (PDF, DOCX, or TXT) — matched directly on the server (no separate extract step)",
-            type=["pdf", "docx", "txt"],
-            key=f"up_jd_{st.session_state.jd_uploader_nonce}",
-        )
-        if up_jd is not None:
-            if st.button("Run semantic match from uploaded file", key="btn_match_jd_file"):
-                try:
-                    tk = int(st.session_state.get("match_top_k", 5))
-                    with st.spinner("Running semantic search..."):
-                        res = post_match_query_file(
-                            up_jd.getvalue(),
-                            up_jd.name or "job.txt",
-                            tk,
-                        )
-                    _clear_match_results_state()
-                    st.session_state["last_match_result"] = res
-                    st.session_state.jd_uploader_nonce += 1
-                    st.rerun()
-                except (httpx.HTTPStatusError, httpx.RequestError) as e:
-                    st.error(format_api_error(e))
-                except Exception as e:
-                    st.error(format_api_error(e))
-        top_k = st.number_input("Top K", min_value=1, max_value=20, value=5, key="match_top_k")
-        jd = st.text_area(
-            "Or paste job description here and use “Run semantic match (from text)”",
-            height=180,
-            key="jd",
-        )
-        if st.button("Run semantic match (from text)"):
-            if len(jd.strip()) < 20:
-                st.warning("Job description should be at least 20 characters.")
-            else:
-                try:
-                    with st.spinner("Running semantic search..."):
-                        res = post_json(
-                            "/api/match/query",
-                            {"job_description": jd.strip(), "top_k": int(top_k)},
-                        )
-                    _clear_match_results_state()
-                    st.session_state["last_match_result"] = res
-                except (httpx.HTTPStatusError, httpx.RequestError) as e:
-                    st.error(format_api_error(e))
-                except Exception as e:
-                    st.error(format_api_error(e))
 
-    match_res = st.session_state.get("last_match_result")
-    if match_res:
-        st.divider()
-        mr1, mr2 = st.columns([4, 1])
-        with mr1:
-            st.markdown("**Match results**")
-        with mr2:
-            if st.button("Clear results", key="btn_clear_match_results"):
+
+def _render_main_app_shell() -> None:
+    st.title("Resume Insight AI")
+    # Log out on its own row below the title so it stays below the fixed app header (same row was clipped at the top).
+    if settings.enable_auth and st.session_state.auth_token:
+        _spacer, _logout_col = st.columns([6, 2])
+        with _logout_col:
+            if st.button("Log out", key="btn_logout"):
+                st.session_state.auth_token = None
+                st.session_state.user_email = None
                 _clear_match_results_state()
                 st.rerun()
-        st.caption(
-            f"Vector store: {match_res.get('store')} — text in each result may be truncated by the server (up to ~8k characters)."
-        )
-        for i, row in enumerate(match_res.get("results") or [], start=1):
-            title = (row.get("title") or "").strip() or "Untitled"
-            rid = row.get("resume_id") or ""
-            content = row.get("content") or ""
-            with st.expander(f"#{i} — {title}"):
-                docx_key = f"match_docx_{rid}_{i}"
-                dl1, dl2 = st.columns(2)
-                with dl1:
-                    st.download_button(
-                        label="Download .txt",
-                        data=content.encode("utf-8"),
-                        file_name=safe_resume_filename(title, i, ".txt"),
-                        mime="text/plain",
-                        key=f"match_dl_txt_{i}_{rid}",
-                    )
-                with dl2:
-                    if docx_key in st.session_state:
-                        st.download_button(
-                            label="Download Word (.docx)",
-                            data=st.session_state[docx_key],
-                            file_name=safe_resume_filename(title, i, ".docx"),
-                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                            key=f"match_dl_docx_{i}_{rid}",
-                        )
-                    elif st.button(
-                        "Build Word (.docx)",
-                        key=f"match_prep_docx_{i}_{rid}",
-                        help="Creates a formatted Word file from this match result.",
-                    ):
-                        try:
-                            st.session_state[docx_key] = post_export_docx(content)
-                        except (httpx.HTTPStatusError, httpx.RequestError) as e:
-                            st.error(format_api_error(e))
-                        except Exception as e:
-                            st.error(format_api_error(e))
-                        else:
-                            st.rerun()
-                st.text(content[:4000] + ("…" if len(content) > 4000 else ""))
-
-with tab_stored:
-    st.subheader("Stored resumes")
+    
     st.caption(
-        "Indexed resumes used for semantic matching. Delete entries you no longer need, or clear the whole list."
+        "AI resume creation and semantic matching (Weaviate required)."
+        + (
+            " Domain transform and voice input are disabled in this build."
+            if not (settings.enable_cv_domain_transform or settings.enable_voice_input)
+            else ""
+        )
     )
+    if settings.enable_auth and st.session_state.user_email:
+        st.caption(f"Signed in as {st.session_state.user_email}.")
+    
+    if "chat_messages" not in st.session_state:
+        st.session_state.chat_messages = []
+    if "export_docx" not in st.session_state:
+        st.session_state.export_docx = None
+    
+    ready_ok, ready_msgs = fetch_ready_status(api_base())
     if not ready_ok:
-        st.info("When the API is ready (see status above), you can view and manage indexed resumes here.")
+        for msg in ready_msgs:
+            st.error(msg)
     else:
-        head_a, head_b = st.columns([1, 2])
-        with head_a:
-            st.button("Refresh list", key="btn_refresh_stored", help="Reload from the vector store")
-        with head_b:
-            confirm_all = st.checkbox(
-                "I understand that deleting all stored resumes cannot be undone.",
-                key="chk_delete_all_stored",
-            )
-            if st.button("Delete all stored resumes", disabled=not confirm_all, key="btn_delete_all_stored"):
-                try:
-                    listing_for_delete = get_json("/api/match/resumes")
-                    rows_for_delete = listing_for_delete.get("resumes") or []
-                    if not rows_for_delete:
-                        st.info("No stored resumes to delete.")
-                    else:
-                        total = len(rows_for_delete)
-                        progress = st.progress(0, text=f"Deleting 0/{total} resumes...")
-                        deleted = 0
-                        failed: list[str] = []
-                        with st.spinner("Deleting stored resumes..."):
-                            for i, item in enumerate(rows_for_delete, start=1):
-                                rid = item.get("resume_id") or ""
-                                title = (item.get("title") or "").strip() or rid or f"resume-{i}"
-                                if not rid:
-                                    failed.append(f"{title}: missing resume_id")
-                                    progress.progress(int((i / total) * 100), text=f"Deleting {i}/{total} resumes...")
-                                    continue
-                                try:
-                                    delete_json(f"/api/match/{rid}")
-                                    deleted += 1
-                                except (httpx.HTTPStatusError, httpx.RequestError) as e:
-                                    failed.append(f"{title}: {format_api_error(e)}")
-                                except Exception as e:
-                                    failed.append(f"{title}: {format_api_error(e)}")
-                                progress.progress(
-                                    int((i / total) * 100),
-                                    text=f"Deleting {i}/{total} resumes...",
-                                )
-                        progress.empty()
-                        st.success(
-                            f"Deletion finished: {deleted}/{total} resume(s) removed"
-                            + (f" (store: {listing_for_delete.get('store', '')})." if listing_for_delete.get("store") else ".")
-                        )
-                        if failed:
-                            st.warning(f"{len(failed)} resume(s) could not be deleted.")
-                            for err in failed:
-                                st.error(err)
-                except (httpx.HTTPStatusError, httpx.RequestError) as e:
-                    st.error(format_api_error(e))
-                except Exception as e:
-                    st.error(format_api_error(e))
-
-        try:
-            listing = get_json("/api/match/resumes")
-        except (httpx.HTTPStatusError, httpx.RequestError) as e:
-            st.error(format_api_error(e))
-            listing = None
-        except Exception as e:
-            st.error(format_api_error(e))
-            listing = None
-        if listing is not None:
-            rows = listing.get("resumes") or []
-            st.caption(f"Vector store: {listing.get('store', '')} — {len(rows)} resume(s).")
-            if not rows:
-                st.info("No resumes indexed yet. Add one under **Semantic matching**.")
-            else:
-                for item in rows:
-                    rid = item.get("resume_id") or ""
-                    title = (item.get("title") or "").strip() or "Untitled"
-                    excerpt = item.get("content_excerpt") or ""
-                    col_l, col_r = st.columns([5, 1])
-                    with col_l:
-                        st.markdown(f"**{title}**")
-                        if excerpt:
-                            st.caption(excerpt)
-                    with col_r:
-                        if rid and st.button("Delete", key=f"del_stored_{rid}"):
-                            try:
-                                delete_json(f"/api/match/{rid}")
-                                st.rerun()
-                            except (httpx.HTTPStatusError, httpx.RequestError) as e:
-                                st.error(format_api_error(e))
-                            except Exception as e:
-                                st.error(format_api_error(e))
-                    st.divider()
-
-if tab_voice is not None:
-    with tab_voice:
-        st.subheader("Speech to text (OpenAI Whisper via API)")
-        up = st.file_uploader("Upload audio (mp3, wav, m4a, webm, …)", type=None)
-        if up and st.button("Transcribe"):
-            raw = up.getvalue()
+        st.caption("API status: ready (OpenAI key set, Weaviate connected).")
+    
+    _tab_labels = ["Resume chatbot"]
+    if settings.enable_cv_domain_transform:
+        _tab_labels.append("Domain transform")
+    _tab_labels.append("Semantic matching")
+    _tab_labels.append("Stored resumes")
+    if settings.enable_voice_input:
+        _tab_labels.append("Voice (Whisper)")
+    _tab_widgets = st.tabs(_tab_labels)
+    _i = 0
+    tab_chat = _tab_widgets[_i]
+    _i += 1
+    tab_xform = None
+    if settings.enable_cv_domain_transform:
+        tab_xform = _tab_widgets[_i]
+        _i += 1
+    tab_match = _tab_widgets[_i]
+    _i += 1
+    tab_stored = _tab_widgets[_i]
+    _i += 1
+    tab_voice = None
+    if settings.enable_voice_input:
+        tab_voice = _tab_widgets[_i]
+    
+    with tab_chat:
+        st.subheader("Conversational resume creation")
+        for m in st.session_state.chat_messages:
+            with st.chat_message(m["role"]):
+                st.markdown(m["content"])
+        prompt = st.chat_input("Describe your background or ask to draft your resume")
+        if prompt:
+            st.session_state.export_docx = None
+            st.session_state.chat_messages.append({"role": "user", "content": prompt})
             try:
-                data = post_file("/api/voice/transcribe", "audio", raw, up.name or "clip.webm")
-                st.text_area("Transcript", value=data.get("text", ""), height=200)
+                payload = {"messages": st.session_state.chat_messages}
+                data = post_json("/api/chat", payload)
+                reply = data.get("reply", "")
+                st.session_state.chat_messages.append({"role": "assistant", "content": reply})
             except (httpx.HTTPStatusError, httpx.RequestError) as e:
                 st.error(format_api_error(e))
             except Exception as e:
                 st.error(format_api_error(e))
+            st.rerun()
+        if st.button("Clear conversation"):
+            st.session_state.chat_messages = []
+            st.session_state.export_docx = None
+            st.rerun()
+    
+        st.divider()
+        st.markdown("**Download formatted resume** — builds a Word file from the **latest AI reply**.")
+        dc1, dc2 = st.columns(2)
+        with dc1:
+            if st.button("Build Word document (.docx)"):
+                t = last_assistant_text().strip()
+                if len(t) < 10:
+                    st.warning("Ask the chatbot to draft your resume first.")
+                else:
+                    try:
+                        st.session_state.export_docx = post_export_docx(t)
+                        st.success("Document ready — download below.")
+                    except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                        st.error(format_api_error(e))
+                    except Exception as e:
+                        st.error(format_api_error(e))
+        with dc2:
+            if st.session_state.export_docx:
+                st.download_button(
+                    label="Download resume.docx",
+                    data=st.session_state.export_docx,
+                    file_name="resume.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    key="download_resume_docx",
+                )
+    
+    if tab_xform is not None:
+        with tab_xform:
+            st.subheader("Cross-domain resume transformation")
+            resume_text = st.text_area("Paste resume text", height=220, placeholder="Full resume…")
+            target = st.text_input("Target domain", placeholder="e.g. Digital Marketing")
+            if st.button("Transform"):
+                if len(resume_text.strip()) < 20 or not target.strip():
+                    st.warning("Provide resume text (20+ chars) and a target domain.")
+                else:
+                    try:
+                        out = post_json(
+                            "/api/transform",
+                            {"resume_text": resume_text, "target_domain": target.strip()},
+                        )
+                        st.markdown(out.get("transformed_resume", ""))
+                    except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                        st.error(format_api_error(e))
+                    except Exception as e:
+                        st.error(format_api_error(e))
+    
+    with tab_match:
+        st.subheader("Upload resume & job description, then match")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("**Your resume**")
+            up_resume = st.file_uploader(
+                "Upload one or more resumes (PDF, DOCX, or TXT) — indexed directly on the server (no separate extract step)",
+                type=["pdf", "docx", "txt"],
+                key=f"up_resume_{st.session_state.resume_uploader_nonce}",
+                accept_multiple_files=True,
+            )
+            title = st.text_input(
+                "Title / name (required for a single file; optional prefix when uploading several)",
+                key="idx_title",
+            )
+            if up_resume:
+                n_files = len(up_resume)
+                btn_label = (
+                    "Index from uploaded file"
+                    if n_files == 1
+                    else f"Index all uploaded files ({n_files})"
+                )
+                if n_files > 1:
+                    st.caption(
+                        "With multiple files, each resume is titled using its file name (without extension). "
+                        "If you enter text in the field above, it is added as a prefix for every file."
+                    )
+                if st.button(btn_label, key="btn_index_resume_file"):
+                    if n_files == 1 and not title.strip():
+                        st.warning(
+                            "Please enter a title or name for this resume. It is used to label your resume in match results."
+                        )
+                    else:
+                        ok = 0
+                        store = None
+                        errs = []
+                        indexed_files: list[str] = []
+                        progress = st.progress(0, text=f"Indexing {n_files} file(s)...")
+                        for i, uf in enumerate(up_resume, start=1):
+                            display_name = uf.name or f"file-{i}"
+                            t = index_title_for_resume_upload(uf.name or "", i, title, n_files)
+                            if t is None:
+                                st.warning(
+                                    "Please enter a title or name for this resume. It is used to label your resume in match results."
+                                )
+                                progress.empty()
+                                break
+                            try:
+                                with st.spinner(f"Indexing {uf.name or 'resume file'}..."):
+                                    res = post_match_index_file(
+                                        t,
+                                        uf.getvalue(),
+                                        uf.name or "resume.pdf",
+                                    )
+                                ok += 1
+                                indexed_files.append(display_name)
+                                store = res.get("store")
+                            except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                                errs.append(f"{display_name}: {format_api_error(e)}")
+                            except Exception as e:
+                                errs.append(f"{display_name}: {format_api_error(e)}")
+                            progress.progress(int((i / n_files) * 100), text=f"Processed {i}/{n_files} file(s)")
+                        progress.empty()
+                        if ok and not errs:
+                            st.success(
+                                f"Indexed {ok} resume(s) successfully"
+                                + (f" (store: {store})." if store else ".")
+                            )
+                            if indexed_files:
+                                st.caption("Indexed files: " + ", ".join(indexed_files))
+                            st.session_state.resume_uploader_nonce += 1
+                            st.rerun()
+                        elif ok and errs:
+                            st.success(f"Indexed {ok} resume(s) (store: {store}). Some files failed:")
+                            if indexed_files:
+                                st.caption("Indexed files: " + ", ".join(indexed_files))
+                            for err in errs:
+                                st.error(err)
+                            st.session_state.resume_uploader_nonce += 1
+                            st.rerun()
+                        elif errs:
+                            for err in errs:
+                                st.error(err)
+            body = st.text_area(
+                "Or paste resume text here and use “Index from text”",
+                height=180,
+                key="idx_body",
+            )
+            if st.button("Index from text"):
+                if not title.strip():
+                    st.warning(
+                        "Please enter a title or name for this resume. It is used to label your resume in match results."
+                    )
+                elif len(body.strip()) < 20:
+                    st.warning("Resume content should be at least 20 characters.")
+                else:
+                    try:
+                        with st.spinner("Indexing resume text..."):
+                            res = post_json(
+                                "/api/match/index",
+                                {"title": title.strip(), "content": body.strip()},
+                            )
+                        st.success(f"Resume indexed successfully (store: {res.get('store')}).")
+                    except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                        st.error(format_api_error(e))
+                    except Exception as e:
+                        st.error(format_api_error(e))
+        with c2:
+            st.markdown("**Job description**")
+            up_jd = st.file_uploader(
+                "Upload job description (PDF, DOCX, or TXT) — matched directly on the server (no separate extract step)",
+                type=["pdf", "docx", "txt"],
+                key=f"up_jd_{st.session_state.jd_uploader_nonce}",
+            )
+            if up_jd is not None:
+                if st.button("Run semantic match from uploaded file", key="btn_match_jd_file"):
+                    try:
+                        tk = int(st.session_state.get("match_top_k", 5))
+                        with st.spinner("Running semantic search..."):
+                            res = post_match_query_file(
+                                up_jd.getvalue(),
+                                up_jd.name or "job.txt",
+                                tk,
+                            )
+                        _clear_match_results_state()
+                        st.session_state["last_match_result"] = res
+                        st.session_state.jd_uploader_nonce += 1
+                        st.rerun()
+                    except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                        st.error(format_api_error(e))
+                    except Exception as e:
+                        st.error(format_api_error(e))
+            top_k = st.number_input("Top K", min_value=1, max_value=20, value=5, key="match_top_k")
+            jd = st.text_area(
+                "Or paste job description here and use “Run semantic match (from text)”",
+                height=180,
+                key="jd",
+            )
+            if st.button("Run semantic match (from text)"):
+                if len(jd.strip()) < 20:
+                    st.warning("Job description should be at least 20 characters.")
+                else:
+                    try:
+                        with st.spinner("Running semantic search..."):
+                            res = post_json(
+                                "/api/match/query",
+                                {"job_description": jd.strip(), "top_k": int(top_k)},
+                            )
+                        _clear_match_results_state()
+                        st.session_state["last_match_result"] = res
+                    except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                        st.error(format_api_error(e))
+                    except Exception as e:
+                        st.error(format_api_error(e))
+    
+        match_res = st.session_state.get("last_match_result")
+        if match_res:
+            st.divider()
+            mr1, mr2 = st.columns([4, 1])
+            with mr1:
+                st.markdown("**Match results**")
+            with mr2:
+                if st.button("Clear results", key="btn_clear_match_results"):
+                    _clear_match_results_state()
+                    st.rerun()
+            st.caption(
+                f"Vector store: {match_res.get('store')} — text in each result may be truncated by the server (up to ~8k characters)."
+            )
+            for i, row in enumerate(match_res.get("results") or [], start=1):
+                title = (row.get("title") or "").strip() or "Untitled"
+                rid = row.get("resume_id") or ""
+                content = row.get("content") or ""
+                with st.expander(f"#{i} — {title}"):
+                    docx_key = f"match_docx_{rid}_{i}"
+                    dl1, dl2 = st.columns(2)
+                    with dl1:
+                        st.download_button(
+                            label="Download .txt",
+                            data=content.encode("utf-8"),
+                            file_name=safe_resume_filename(title, i, ".txt"),
+                            mime="text/plain",
+                            key=f"match_dl_txt_{i}_{rid}",
+                        )
+                    with dl2:
+                        if docx_key in st.session_state:
+                            st.download_button(
+                                label="Download Word (.docx)",
+                                data=st.session_state[docx_key],
+                                file_name=safe_resume_filename(title, i, ".docx"),
+                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                key=f"match_dl_docx_{i}_{rid}",
+                            )
+                        elif st.button(
+                            "Build Word (.docx)",
+                            key=f"match_prep_docx_{i}_{rid}",
+                            help="Creates a formatted Word file from this match result.",
+                        ):
+                            try:
+                                st.session_state[docx_key] = post_export_docx(content)
+                            except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                                st.error(format_api_error(e))
+                            except Exception as e:
+                                st.error(format_api_error(e))
+                            else:
+                                st.rerun()
+                    st.text(content[:4000] + ("…" if len(content) > 4000 else ""))
+    
+    with tab_stored:
+        st.subheader("Stored resumes")
+        st.caption(
+            "Indexed resumes used for semantic matching. Delete entries you no longer need, or clear the whole list."
+        )
+        if not ready_ok:
+            st.info("When the API is ready (see status above), you can view and manage indexed resumes here.")
+        else:
+            head_a, head_b = st.columns([1, 2])
+            with head_a:
+                st.button("Refresh list", key="btn_refresh_stored", help="Reload from the vector store")
+            with head_b:
+                confirm_all = st.checkbox(
+                    "I understand that deleting all stored resumes cannot be undone.",
+                    key="chk_delete_all_stored",
+                )
+                if st.button("Delete all stored resumes", disabled=not confirm_all, key="btn_delete_all_stored"):
+                    try:
+                        listing_for_delete = get_json("/api/match/resumes")
+                        rows_for_delete = listing_for_delete.get("resumes") or []
+                        if not rows_for_delete:
+                            st.info("No stored resumes to delete.")
+                        else:
+                            total = len(rows_for_delete)
+                            progress = st.progress(0, text=f"Deleting 0/{total} resumes...")
+                            deleted = 0
+                            failed: list[str] = []
+                            with st.spinner("Deleting stored resumes..."):
+                                for i, item in enumerate(rows_for_delete, start=1):
+                                    rid = item.get("resume_id") or ""
+                                    title = (item.get("title") or "").strip() or rid or f"resume-{i}"
+                                    if not rid:
+                                        failed.append(f"{title}: missing resume_id")
+                                        progress.progress(int((i / total) * 100), text=f"Deleting {i}/{total} resumes...")
+                                        continue
+                                    try:
+                                        delete_json(f"/api/match/{rid}")
+                                        deleted += 1
+                                    except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                                        failed.append(f"{title}: {format_api_error(e)}")
+                                    except Exception as e:
+                                        failed.append(f"{title}: {format_api_error(e)}")
+                                    progress.progress(
+                                        int((i / total) * 100),
+                                        text=f"Deleting {i}/{total} resumes...",
+                                    )
+                            progress.empty()
+                            st.success(
+                                f"Deletion finished: {deleted}/{total} resume(s) removed"
+                                + (f" (store: {listing_for_delete.get('store', '')})." if listing_for_delete.get("store") else ".")
+                            )
+                            if failed:
+                                st.warning(f"{len(failed)} resume(s) could not be deleted.")
+                                for err in failed:
+                                    st.error(err)
+                    except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                        st.error(format_api_error(e))
+                    except Exception as e:
+                        st.error(format_api_error(e))
+    
+            try:
+                listing = get_json("/api/match/resumes")
+            except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                st.error(format_api_error(e))
+                listing = None
+            except Exception as e:
+                st.error(format_api_error(e))
+                listing = None
+            if listing is not None:
+                rows = listing.get("resumes") or []
+                st.caption(f"Vector store: {listing.get('store', '')} — {len(rows)} resume(s).")
+                if not rows:
+                    st.info("No resumes indexed yet. Add one under **Semantic matching**.")
+                else:
+                    for item in rows:
+                        rid = item.get("resume_id") or ""
+                        title = (item.get("title") or "").strip() or "Untitled"
+                        excerpt = item.get("content_excerpt") or ""
+                        col_l, col_r = st.columns([5, 1])
+                        with col_l:
+                            st.markdown(f"**{title}**")
+                            if excerpt:
+                                st.caption(excerpt)
+                        with col_r:
+                            if rid and st.button("Delete", key=f"del_stored_{rid}"):
+                                try:
+                                    delete_json(f"/api/match/{rid}")
+                                    st.rerun()
+                                except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                                    st.error(format_api_error(e))
+                                except Exception as e:
+                                    st.error(format_api_error(e))
+                        st.divider()
+    
+    if tab_voice is not None:
+        with tab_voice:
+            st.subheader("Speech to text (OpenAI Whisper via API)")
+            up = st.file_uploader("Upload audio (mp3, wav, m4a, webm, …)", type=None)
+            if up and st.button("Transcribe"):
+                raw = up.getvalue()
+                try:
+                    data = post_file("/api/voice/transcribe", "audio", raw, up.name or "clip.webm")
+                    st.text_area("Transcript", value=data.get("text", ""), height=200)
+                except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                    st.error(format_api_error(e))
+                except Exception as e:
+                    st.error(format_api_error(e))
+
+
+
+# Inject fixed-position side panel images first (outside any column layout)
+_render_side_panels()
+
+# Single-column layout — the fixed left panel handles the imagery
+_render_main_app_shell()
