@@ -12,6 +12,12 @@ from streamlit_errors import format_api_error
 DEFAULT_API = os.environ.get("RESUME_INSIGHT_API", "http://127.0.0.1:8000")
 
 
+def is_valid_email(email: str) -> bool:
+    """Check if the provided string is a valid email address."""
+    pattern = r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$"
+    return bool(re.match(pattern, email))
+
+
 def api_base() -> str:
     return DEFAULT_API.rstrip("/")
 
@@ -455,17 +461,20 @@ def _clear_match_results_state() -> None:
 
 if settings.enable_auth and not st.session_state.auth_token:
     st.title("Resume Insight AI")
-    st.caption("Sign in or register to continue. The API must run with PostgreSQL auth enabled.")
+    st.caption("Sign in or register to continue.")
     tab_login, tab_reg = st.tabs(["Log in", "Register"])
     with tab_login:
         le = st.text_input("Email", key="wall_login_email", autocomplete="email")
         lp = st.text_input("Password", type="password", key="wall_login_password")
         if st.button("Log in", key="wall_btn_login", type="primary"):
-            if not (le or "").strip() or not lp:
+            email_val = (le or "").strip()
+            if not email_val or not lp:
                 st.warning("Enter email and password.")
+            elif not is_valid_email(email_val):
+                st.warning("Please enter a valid email address.")
             else:
                 try:
-                    data = post_auth_login((le or "").strip(), lp)
+                    data = post_auth_login(email_val, lp)
                     st.session_state.auth_token = data.get("access_token")
                     st.session_state.user_email = data.get("email")
                     st.rerun()
@@ -474,14 +483,16 @@ if settings.enable_auth and not st.session_state.auth_token:
                 except Exception as e:
                     st.error(format_api_error(e))
     with tab_reg:
-        re = st.text_input("Email", key="wall_reg_email", autocomplete="email")
+        reg_email = st.text_input("Email", key="wall_reg_email", autocomplete="email")
         rp = st.text_input("Password", type="password", key="wall_reg_password")
         rp2 = st.text_input("Confirm password", type="password", key="wall_reg_password2")
         st.caption("Password must be at least 8 characters.")
         if st.button("Create account", key="wall_btn_register", type="primary"):
-            e = (re or "").strip()
+            e = (reg_email or "").strip()
             if not e or not rp:
                 st.warning("Enter email and password.")
+            elif not is_valid_email(e):
+                st.warning("Please enter a valid email address.")
             elif rp != rp2:
                 st.warning("Passwords do not match.")
             elif len(rp) < 8:
@@ -547,12 +558,8 @@ def _render_main_app_shell() -> None:
                 st.rerun()
     
     st.caption(
-        "AI resume creation and semantic matching (Weaviate required)."
-        + (
-            " Domain transform and voice input are disabled in this build."
-            if not (settings.enable_cv_domain_transform or settings.enable_voice_input)
-            else ""
-        )
+        "AI resume creation and semantic matching tool built with OpenAI and Weaviate."
+        
     )
     if settings.enable_auth and st.session_state.user_email:
         st.caption(f"Signed in as {st.session_state.user_email}.")
