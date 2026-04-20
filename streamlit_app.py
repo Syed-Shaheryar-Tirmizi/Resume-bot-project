@@ -511,10 +511,9 @@ if settings.enable_auth and not st.session_state.auth_token:
 
 _APP_ROOT = Path(__file__).resolve().parent
 _LEFT_IMAGE_1 = _APP_ROOT / "Resume creation left 1.jpeg"
-_LEFT_IMAGE_2 = _APP_ROOT / "Resume creation left 2.jpeg"
-# Right side images added by user (noting one is .jpeg and one is .png, all lowercase)
-_RIGHT_IMAGE_1 = _APP_ROOT / "resume creation right 1.jpeg"
+# Right side images added by user
 _RIGHT_IMAGE_2 = _APP_ROOT / "resume creation right 2.jpeg"
+
 
 
 def _render_side_panels() -> None:
